@@ -155,17 +155,23 @@ const LOCAL_MODELS_CATALOG = [
   {
     id: 'local-llm-qwen35-9b',
     category: 'Dịch thuật AI Local (LLM)',
-    name: 'Qwen3.5 9B (Apple MLX 4-bit) — dịch Trung/Nhật/Hàn → Việt',
+    name: process.platform === 'win32' ? 'Qwen3.5 9B (GGUF Q4_K_M • llama.cpp) — dịch Trung/Nhật/Hàn → Việt' : 'Qwen3.5 9B (Apple MLX 4-bit) — dịch Trung/Nhật/Hàn → Việt',
     language: 'Trung, Nhật, Hàn, Anh → Việt',
     supportedLanguages: ['zh', 'ja', 'ko', 'en', 'vi'],
     quality: 'Tốt nhất trong các model local đã đánh giá (30 câu thật): ~3,2 giây/câu trên M2 Pro, dùng Hán-Việt cho tên riêng',
-    modelSizeMB: 5600,
-    sizeMB: 5600,
-    license: 'Apache-2.0 (Qwen) / MIT (mlx-lm)',
-    hardwareReq: 'Mac chip Apple (M1+), RAM trống >= 6 GB',
-    ramRequired: 'Mac chip Apple (M1+), RAM trống >= 6 GB (Chạy 100% Offline)',
-    cpuGpuNote: 'Apple MLX (GPU Metal)',
-    relPath: path.join('llm', 'Qwen3.5-9B-MLX-4bit', 'config.json'),
+    modelSizeMB: process.platform === 'win32' ? 5420 : 5600,
+    sizeMB: process.platform === 'win32' ? 5420 : 5600,
+    license: process.platform === 'win32' ? 'Apache-2.0 (Qwen) / MIT (llama.cpp)' : 'Apache-2.0 (Qwen) / MIT (mlx-lm)',
+    hardwareReq: process.platform === 'win32' ? 'Windows 10/11, RAM 16 GB (GPU tùy chọn)' : 'Mac chip Apple (M1+), RAM trống >= 6 GB',
+    ramRequired:
+      process.platform === 'win32'
+        ? 'Windows 10/11, RAM 16 GB; GPU NVIDIA/AMD/Intel (Vulkan) tăng tốc nếu có (Chạy 100% Offline)'
+        : 'Mac chip Apple (M1+), RAM trống >= 6 GB (Chạy 100% Offline)',
+    cpuGpuNote: process.platform === 'win32' ? 'llama.cpp (Vulkan GPU hoặc CPU)' : 'Apple MLX (GPU Metal)',
+    relPath:
+      process.platform === 'win32'
+        ? path.join('llm', 'Qwen3.5-9B-Q4_K_M-GGUF', 'Qwen3.5-9B-Q4_K_M.gguf')
+        : path.join('llm', 'Qwen3.5-9B-MLX-4bit', 'config.json'),
     isDefault: true
   },
   {
@@ -1118,6 +1124,14 @@ function isAiTranslationProvider(v) {
   return v === 'ai' || v.startsWith('ai_');
 }
 
+const NO_OFFLINE_TRANSLATOR_MSG =
+  'Chưa cài bộ dịch Offline: mở mục "Công cụ" → cài "AI dịch Local Qwen3.5 9B" (dịch ngay trên máy, không cần API Key), hoặc bật dịch AI Cloud (Gemini).';
+
+function isArgosInstalled() {
+  const root = path.join(PROJECT_ROOT, 'bin', 'models', 'argos');
+  return ['translate-zh_en-1_9', 'translate-en_vi-1_9'].every((d) => fs.existsSync(path.join(root, d, 'model')));
+}
+
 function resolveEffectiveTranslationProvider(rawProvider, cloudConsent) {
   const v = normalizeTranslationProvider(rawProvider);
   // AI Local (Qwen) chạy trên máy: không cần đồng ý gửi Cloud
@@ -1127,6 +1141,7 @@ function resolveEffectiveTranslationProvider(rawProvider, cloudConsent) {
   // "Offline trên máy": dùng AI Local Qwen (chất lượng cao hơn hẳn Argos) khi đã cài; Argos chỉ còn là dự phòng nếu có
   if (v === 'local' && isProviderReady('local_qwen')) return 'ai_local_qwen';
   if (v === 'local' && isLocalProvider('openai_compatible') && isProviderReady('openai_compatible')) return 'ai_openai_compatible';
+  if (v === 'local' && !isArgosInstalled()) throw new Error(NO_OFFLINE_TRANSLATOR_MSG);
   if ((v === 'cloud_google' || isAiTranslationProvider(v)) && !cloudConsent) {
     throw new Error('Bộ dịch Cloud/AI yêu cầu tích chọn đồng ý gửi văn bản lên dịch vụ đám mây để bảo vệ riêng tư.');
   }
@@ -1134,6 +1149,7 @@ function resolveEffectiveTranslationProvider(rawProvider, cloudConsent) {
     if (!cloudConsent) {
       if (isProviderReady('local_qwen')) return 'ai_local_qwen';
       if (isLocalProvider('openai_compatible') && isProviderReady('openai_compatible')) return 'ai_openai_compatible';
+      if (!isArgosInstalled()) throw new Error(NO_OFFLINE_TRANSLATOR_MSG);
       return 'local';
     }
     try {

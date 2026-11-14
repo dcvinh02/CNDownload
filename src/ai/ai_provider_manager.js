@@ -25,6 +25,9 @@ const LOG_FILE = path.join(CONFIG_DIR, 'ai_logs.jsonl');
 const LOCAL_PROVIDER_ID = 'local_qwen';
 
 const DEFAULT_TIMEOUT_MS = 90000;
+// AI chạy trên máy (Qwen llama.cpp/MLX, Ollama, LM Studio): máy Windows không GPU sinh ~3–8 token/s,
+// một khối dịch có thể mất vài phút — không áp giới hạn 90 s của dịch vụ Cloud.
+const LOCAL_TIMEOUT_MS = 20 * 60 * 1000;
 const MAX_ATTEMPTS = 3;
 
 class AiProviderError extends Error {
@@ -416,13 +419,15 @@ function makeOpenAiAdapter(id, defaultBaseUrl) {
       };
       if (temperature !== null) body.temperature = temperature;
       if (jsonSchema) body.response_format = { type: 'json_object' };
+      const timeoutMs = isLocalhostUrl(base) ? LOCAL_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
       let data;
       try {
         data = await httpJson(id, `${base}/chat/completions`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${apiKey}` },
           body,
-          signal
+          signal,
+          timeoutMs
         });
       } catch (err) {
         // Một số model (reasoning) không chấp nhận temperature hoặc response_format -> thử lại không có các trường này
@@ -433,7 +438,8 @@ function makeOpenAiAdapter(id, defaultBaseUrl) {
             method: 'POST',
             headers: { Authorization: `Bearer ${apiKey}` },
             body,
-            signal
+            signal,
+            timeoutMs
           });
         } else {
           throw err;
@@ -462,7 +468,7 @@ const localQwenAdapter = {
   isLocal: true,
   async listModels() {
     if (!localLlm.isRuntimeInstalled()) {
-      throw new AiProviderError('NO_KEY', 'Chưa cài môi trường AI Local (mlx-lm). Mở trình cài công cụ để cài.', { providerId: LOCAL_PROVIDER_ID });
+      throw new AiProviderError('NO_KEY', 'Chưa cài AI Local Qwen. Mở trình cài công cụ → "AI dịch Local" để cài.', { providerId: LOCAL_PROVIDER_ID });
     }
     const models = localLlm.listInstalledModels().map((m) => ({ id: m.id, label: `${m.label} • ${m.sizeGB} GB` }));
     if (models.length === 0) {
@@ -494,7 +500,7 @@ const ADAPTERS = {
 const PROVIDER_META = {
   local_qwen: {
     id: LOCAL_PROVIDER_ID,
-    name: 'AI Local (Qwen • Apple MLX — không cần API Key)',
+    name: localLlm.BACKEND === 'llamacpp' ? 'AI Local (Qwen3.5 9B • llama.cpp — không cần API Key)' : 'AI Local (Qwen • Apple MLX — không cần API Key)',
     keyHelpUrl: '',
     needsBaseUrl: false,
     needsKey: false,

@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Bọc máy chủ `mlx_lm server` để nó KHÔNG BAO GIỜ mồ côi.
+Bọc máy chủ LLM cục bộ (`mlx_lm server` trên Mac, `llama-server.exe` trên Windows) để nó KHÔNG BAO GIỜ mồ côi.
 
 Node giữ một pipe stdin mở tới wrapper. Khi ứng dụng Node thoát (kể cả bị tắt đột ngột / crash),
 pipe bị đóng -> wrapper đọc được EOF -> dừng máy chủ MLX (SIGTERM, sau 3 giây SIGKILL) và giải phóng RAM/GPU.
 
 Dùng: python llm_server_wrapper.py <các tham số của mlx_lm server ...>
+      python llm_server_wrapper.py --exec <đường dẫn llama-server> <tham số ...>
 """
 
 import os
@@ -17,7 +18,14 @@ import threading
 
 
 def main():
-    child = subprocess.Popen([sys.executable, "-m", "mlx_lm", "server", *sys.argv[1:]])
+    argv = sys.argv[1:]
+    if argv[:1] == ["--exec"] and len(argv) >= 2:
+        cmd = argv[1:]
+    else:
+        cmd = [sys.executable, "-m", "mlx_lm", "server", *argv]
+    # Windows: không mở cửa sổ console riêng cho máy chủ
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    child = subprocess.Popen(cmd, creationflags=flags)
 
     def shutdown(*_):
         if child.poll() is None:

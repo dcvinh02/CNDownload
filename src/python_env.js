@@ -235,7 +235,7 @@ const ensureCoreVenv = (onStep, opts = {}) =>
 const ensureVieneuVenv = (onStep) => ensureVenv('vieneu', { requirements: 'vieneu.txt', checkModules: ['vieneu'], onStep });
 const ensureLlmVenv = (onStep) => {
   if (process.platform !== 'darwin' || process.arch !== 'arm64') {
-    return Promise.reject(new Error('AI Local (MLX) chỉ chạy trên Mac chip Apple. Trên Windows hãy dùng Gemini hoặc Ollama/LM Studio (API tương thích OpenAI).'));
+    return Promise.reject(new Error('Môi trường MLX chỉ dành cho Mac chip Apple (Windows dùng llama.cpp — cài qua mục "AI dịch Local").'));
   }
   return ensureVenv('llm', { requirements: 'llm-macos.txt', checkModules: ['mlx_lm'], onStep });
 };

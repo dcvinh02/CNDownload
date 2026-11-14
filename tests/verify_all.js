@@ -764,7 +764,7 @@ async function runAllTests() {
     });
   } catch (err) {
     // Máy chưa cài bộ dịch Offline nào (Argos / Qwen / Ollama) — không phải lỗi mã nguồn, báo BLOCKED
-    if (!/Thiếu mô hình dịch Offline/.test(err.message)) throw err;
+    if (!/Thiếu mô hình dịch Offline|Chưa cài bộ dịch Offline/.test(err.message)) throw err;
     localNmtMissing = err.message;
   }
   if (localNmtMissing) {

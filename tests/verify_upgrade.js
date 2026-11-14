@@ -46,7 +46,7 @@ async function check(name, fn) {
   } catch (err) {
     if (err && err.skip) record(err.blocked ? 'BLOCKED' : 'SKIP', name, err.message);
     // Máy chưa cài bộ dịch Offline nào (Argos/Qwen/Ollama): thiếu điều kiện tiên quyết, không phải lỗi mã
-    else if (err && /Thiếu mô hình dịch Offline/.test(err.message)) record('BLOCKED', name, 'Chưa cài bộ dịch Offline (chạy: node scripts/setup.js)');
+    else if (err && /Thiếu mô hình dịch Offline|Chưa cài bộ dịch Offline/.test(err.message)) record('BLOCKED', name, 'Chưa cài bộ dịch Offline (chạy: node scripts/setup.js)');
     else record('FAIL', name, err && err.stack ? err.stack.split('\n').slice(0, 3).join(' | ') : String(err));
   }
 }
@@ -668,11 +668,18 @@ async function main() {
     if (!fixtureVoice) throw skip('Không tạo được video thử (cần giọng Tingting trên macOS, hoặc edge-tts + Internet).', true);
     if (!vst.sdkInstalled || !vst.modelDownloaded) throw skip('VieNeu-TTS chưa cài.');
     syncJob = await runDub({ voiceId: `vieneu:${vst.defaultVoice}`, originalVolume: 0, dubVolume: 1, autoDucking: false, removeOriginalVoice: false });
-    assert(syncJob.segments.length === 3, `ASR phải ra 3 phân đoạn, nhận ${syncJob.segments.length}`);
+    // Yêu cầu thật: KHÔNG gộp 2 câu cách nhau >= 1 s vào 1 đoạn, và mỗi câu có 1 đoạn bắt đầu đúng lúc.
+    // (Được phép tách 1 câu ở chỗ ngắt hơi dài — ASR tách theo khoảng nghỉ thật để đồng bộ.)
+    const segs = syncJob.segments;
+    const segDesc = segs.map((x) => `[${x.startSec}-${x.endSec}] ${x.sourceText}`).join(' | ');
+    assert(segs.length >= 3 && segs.length <= 6, `số phân đoạn ${segs.length}: ${segDesc}`);
+    const merged = segs.filter((x) => truthOnsets.filter((t) => t > x.startSec + 0.3 && t < x.endSec - 0.3).length > 0);
+    assert(merged.length === 0, `đoạn gộp nhiều câu: ${merged.map((x) => x.sourceText).join(' | ')}`);
+    const startDiff = truthOnsets.map((t) => Math.min(...segs.map((x) => Math.abs(x.startSec - t))));
+    assert(startDiff.every((d) => d <= 0.3), `mốc ASR lệch ${startDiff.map((d) => d.toFixed(2)).join(', ')} s: ${segDesc}`);
     const dubOn = onsetsOf(syncJob.outputPath, -38);
     assert(dubOn.length >= 3, `onsets=${JSON.stringify(dubOn)}`);
     const diffs = truthOnsets.map((t) => Math.min(...dubOn.map((o) => Math.abs(o - t))));
-    if (process.env.TEST_DEBUG_SYNC) console.log("DBG truth", truthOnsets, "dub", dubOn, "asr", syncJob.segments.map((s) => [s.startSec, s.endSec, s.sourceText]));
     assert(diffs.every((d) => d <= 0.15), `lệch ${diffs.map((d) => d.toFixed(3)).join(', ')} s`);
     return `[${fixtureVoice}] onset lồng tiếng ${dubOn.slice(0, 3).join(' / ')} s vs gốc ${truthOnsets.join(' / ')} s (lệch tối đa ${(Math.max(...diffs) * 1000).toFixed(0)} ms)`;
   });
@@ -792,7 +799,7 @@ async function main() {
       if (task.status !== 'running') break;
     }
     assert(task.status === 'completed', `${task.status} ${task.errors.join(' ')}`);
-    assert(task.result.segments.length === 3 && task.result.validation, 'thiếu kết quả/kiểm tra');
+    assert(task.result && task.result.segments.length >= 3 && task.result.segments.length <= 6 && task.result.validation, `thiếu kết quả/kiểm tra: ${JSON.stringify(task.result && task.result.segments && task.result.segments.map((x) => x.sourceText))}`);
     return `giai đoạn đã thấy: ${Array.from(seenStages).join(' → ')}; ${task.result.segments.length} đoạn, ${task.elapsedSec}s`;
   });
   await check('/api/ai/config không trả về API Key', async () => {

@@ -2890,7 +2890,7 @@ function renderAiConfig() {
         ${lt && !lt.ok ? `<div class="ai-error-box">${escapeHtml(lt.error || '')}</div>` : ''}
         ${
           p.isLocal
-            ? `<div style="font-size:11.5px;color:#334155;">Chạy Qwen trên máy bằng Apple MLX — không cần API Key, không gửi dữ liệu ra ngoài. ${p.hasKey ? '' : '<button type="button" class="btn-sm" onclick="openToolInstallerModal()">🧰 Cài AI Local</button>'}</div>`
+            ? `<div style="font-size:11.5px;color:#334155;">Chạy Qwen3.5 9B ngay trên máy (Mac: Apple MLX • Windows: llama.cpp) — không cần API Key, không gửi dữ liệu ra ngoài. ${p.hasKey ? '' : '<button type="button" class="btn-sm" onclick="openToolInstallerModal()">🧰 Cài AI Local</button>'}</div>`
             : `        <label class="ai-field"><span>API Key ${p.keyHelpUrl ? `(<a href="#" onclick="openExternalUrl('${escapeHtml(p.keyHelpUrl)}');return false;">lấy key</a>)` : ''}</span>
           <input type="password" autocomplete="off" class="folder-input" id="aiKey_${escapeHtml(p.id)}" placeholder="${p.hasKey ? 'Để trống = giữ key hiện tại' : 'Dán API Key...'}" />
         </label>`

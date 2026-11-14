@@ -31,8 +31,10 @@ jobs:
           path: |
             bin/models
             bin/tools/python
+            bin/tools/llama.cpp
           key: ai-${{ runner.os }}-${{ hashFiles('requirements/*.txt', 'src/tool_installer.js', 'src/python_env.js') }}
 
+      # Windows: cài cả AI dịch Local Qwen3.5 9B (llama.cpp, chạy CPU trên máy CI) — giống máy người dùng
       - name: Cài thành phần AI (Python 3.12, model) như máy mới
         run: node scripts/setup.js --yes
 

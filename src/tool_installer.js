@@ -210,24 +210,44 @@ function resolveOfficialToolSource(toolId, platform = process.platform, arch = p
         'Cài thủ công: tải uv tại https://github.com/astral-sh/uv/releases → `uv python install 3.12` → `uv venv .venv --python 3.12` → `uv pip install -r requirements/core.txt` (đặt VIRTUAL_ENV=.venv).'
       ]
     },
-    localLlmQwen: {
-      id: 'localLlmQwen',
-      name: 'AI dịch Local (Qwen • Apple MLX — không cần API Key)',
-      category: 'Mô hình AI Local (LLM dịch thuật)',
-      officialProvider: 'PyPI `mlx-lm` (Apple MLX) + HuggingFace (mlx-community)',
-      license: 'MIT (mlx-lm) / Apache-2.0 (Qwen)',
-      downloadUrl: 'https://pypi.org/project/mlx-lm/',
-      targetPath: path.join(PROJECT_ROOT, '.venv-llm'),
-      archiveType: 'mlx_llm',
-      minBytes: 0,
-      estimatedSizeMB: 6500,
-      description:
-        'Dịch Trung–Việt bằng Qwen chạy trên GPU Apple Silicon (MLX), không gửi dữ liệu ra ngoài, không cần API Key. Chỉ hỗ trợ máy Mac chip Apple (M1 trở lên).',
-      remediationSteps: [
-        'Chỉ chạy trên macOS Apple Silicon. Máy Windows/Intel: dùng "API tương thích OpenAI" trỏ tới LM Studio/Ollama trên máy.',
-        'Cài thủ công: `bin/tools/uvpkg/bin/uv venv .venv-llm --python 3.12` → `VIRTUAL_ENV=.venv-llm bin/tools/uvpkg/bin/uv pip install mlx-lm`, rồi tải model vào bin/models/llm/.'
-      ]
-    },
+    localLlmQwen:
+      localLlm.BACKEND === 'llamacpp'
+        ? {
+            id: 'localLlmQwen',
+            name: 'AI dịch Local Qwen3.5 9B (llama.cpp — không cần API Key)',
+            category: 'Mô hình AI Local (LLM dịch thuật)',
+            officialProvider: `GitHub Releases (ggml-org/llama.cpp ${localLlm.LLAMA_CPP.build}, Vulkan) + HuggingFace (unsloth/Qwen3.5-9B-GGUF)`,
+            license: 'MIT (llama.cpp) / Apache-2.0 (Qwen3.5)',
+            downloadUrl: localLlm.LLAMA_CPP.url,
+            targetPath: localLlm.LLAMA_CPP.serverBin,
+            archiveType: 'llamacpp_llm',
+            minBytes: 0,
+            estimatedSizeMB: 5800,
+            description:
+              'Dịch Trung–Việt bằng Qwen3.5 9B chạy ngay trên máy Windows (GPU NVIDIA/AMD/Intel qua Vulkan, tự chạy CPU nếu không có GPU). Không gửi dữ liệu ra ngoài, không cần API Key, không cài gì vào hệ thống. Nên có RAM 16 GB.',
+            remediationSteps: [
+              `Tải thủ công ${localLlm.LLAMA_CPP.url} → giải nén vào bin/tools/llama.cpp/${localLlm.LLAMA_CPP.build}/ (SHA-256 ${localLlm.LLAMA_CPP.asset ? localLlm.LLAMA_CPP.asset.sha256 : ''}).`,
+              'Tải Qwen3.5-9B-Q4_K_M.gguf tại https://huggingface.co/unsloth/Qwen3.5-9B-GGUF → đặt vào bin/models/llm/Qwen3.5-9B-Q4_K_M-GGUF/.',
+              'Máy dưới 16 GB RAM có thể chậm; khi đó nên dùng Gemini (miễn phí qua AI Studio).'
+            ]
+          }
+        : {
+            id: 'localLlmQwen',
+            name: 'AI dịch Local (Qwen • Apple MLX — không cần API Key)',
+            category: 'Mô hình AI Local (LLM dịch thuật)',
+            officialProvider: 'PyPI `mlx-lm` (Apple MLX) + HuggingFace (mlx-community)',
+            license: 'MIT (mlx-lm) / Apache-2.0 (Qwen)',
+            downloadUrl: 'https://pypi.org/project/mlx-lm/',
+            targetPath: path.join(PROJECT_ROOT, '.venv-llm'),
+            archiveType: 'mlx_llm',
+            minBytes: 0,
+            estimatedSizeMB: 6500,
+            description:
+              'Dịch Trung–Việt bằng Qwen chạy trên GPU Apple Silicon (MLX), không gửi dữ liệu ra ngoài, không cần API Key. Máy Mac chip Apple (M1 trở lên).',
+            remediationSteps: [
+              'Cài thủ công: `bin/tools/uvpkg/bin/uv venv .venv-llm --python 3.12` → `VIRTUAL_ENV=.venv-llm bin/tools/uvpkg/bin/uv pip install mlx-lm`, rồi tải model vào bin/models/llm/.'
+            ]
+          },
     voiceSeparation: {
       id: 'voiceSeparation',
       name: 'Tách giọng gốc khỏi nhạc nền (Spleeter 2-stems fp16)',
@@ -551,7 +571,8 @@ async function verifyInstalledToolOrModel(toolId) {
  * Danh sách tất cả công cụ / mô hình có thể kiểm tra và cài đặt
  */
 function getInstallableToolsCatalog() {
-  const ids = ['pythonCore', 'ytdlp', 'ffmpeg', 'webkitSniffer', 'localAsr', 'localAsrSmall', 'speakerDiarization', 'voiceSeparation', 'localLlmQwen', 'localTts', 'vieneuTts', 'localNmt'];
+  // Không liệt kê Argos (localNmt) và Whisper tiny (localAsr): đã kiểm nghiệm chất lượng kém, thay bằng Qwen3.5 9B / Whisper small.
+  const ids = ['pythonCore', 'ytdlp', 'ffmpeg', 'webkitSniffer', 'localAsrSmall', 'speakerDiarization', 'voiceSeparation', 'localLlmQwen', 'localTts', 'vieneuTts'];
   const modelsStatus = getLocalModelsStatus();
 
   return ids
@@ -808,7 +829,7 @@ function startToolInstallJob({ toolId, userConfirmed = false }) {
             if (total > 0) job.progress = Math.min(85, 40 + Math.round((dl / total) * 45));
           }
         );
-      } else if (spec.archiveType === 'mlx_llm') {
+      } else if (spec.archiveType === 'mlx_llm' || spec.archiveType === 'llamacpp_llm') {
         await installLocalLlm(job);
       } else if (spec.archiveType === 'vieneu_python') {
         await installVieneuEnvironment(job);
@@ -874,6 +895,7 @@ function startToolInstallJob({ toolId, userConfirmed = false }) {
  * Cài AI dịch Local: .venv-llm (Python 3.12 qua uv) + mlx-lm, rồi tải model Qwen mặc định từ HuggingFace.
  */
 async function installLocalLlm(job) {
+  if (localLlm.BACKEND === 'llamacpp') return installLlamaCppLlm(job);
   job.progress = 10;
   await pyEnv.ensureLlmVenv((msg) => {
     job.step = msg;
@@ -890,15 +912,114 @@ async function installLocalLlm(job) {
   }
 }
 
+/**
+ * Windows: llama.cpp (bản chính thức đã ghim, kiểm SHA-256) + model GGUF Qwen3.5-9B Q4_K_M (kiểm SHA-256).
+ * Không cần quyền Administrator, không cài gì vào hệ thống — tất cả nằm trong bin/.
+ */
+async function installLlamaCppLlm(job) {
+  const lc = localLlm.LLAMA_CPP;
+  if (!lc.asset) throw new Error(`Chưa có bản llama.cpp cho kiến trúc ${process.arch}.`);
+  job.progress = 5;
+  job.step = 'Kiểm tra môi trường Python lõi (dùng để tải model và giám sát máy chủ AI)...';
+  await pyEnv.ensureCoreVenv((msg) => {
+    job.step = msg;
+  });
+
+  if (!fs.existsSync(lc.serverBin)) {
+    const zip = path.join(PROJECT_ROOT, 'bin', 'tools', `${lc.asset.name}.part`);
+    job.progress = 10;
+    await downloadFileWithProgress(lc.url, zip, (done, total) => {
+      job.step = `Đang tải llama.cpp ${lc.build} (${(done / 1048576).toFixed(0)}/${((total || lc.asset.sizeMB * 1048576) / 1048576).toFixed(0)} MB)...`;
+    });
+    const sha = await computeFileSha256(zip);
+    if (sha !== lc.asset.sha256) {
+      fs.rmSync(zip, { force: true });
+      throw new Error(`Mã SHA-256 của llama.cpp không khớp (nhận ${sha.slice(0, 16)}…) — đã hủy, không giải nén.`);
+    }
+    job.step = 'Đang giải nén llama.cpp...';
+    fs.rmSync(lc.dir, { recursive: true, force: true });
+    fs.mkdirSync(lc.dir, { recursive: true });
+    await pyEnv.extractArchive(zip, lc.dir);
+    fs.rmSync(zip, { force: true });
+    if (!fs.existsSync(lc.serverBin)) throw new Error('Giải nén llama.cpp xong nhưng không thấy llama-server.exe.');
+  }
+
+  const model = localLlm.LOCAL_LLM_MODELS[0];
+  if (!localLlm.isModelInstalled(model.id)) {
+    const dir = path.join(localLlm.MODELS_DIR, model.id);
+    fs.mkdirSync(dir, { recursive: true });
+    job.progress = 15;
+    job.step = `Đang tải model ${model.label} (~${model.sizeGB} GB) từ HuggingFace (tải tiếp được nếu bị ngắt)...`;
+    const dlDir = path.join(dir, '.cache', 'huggingface', 'download');
+    const timer = setInterval(() => {
+      try {
+        const part = fs.readdirSync(dlDir).filter((f) => f.endsWith('.incomplete')).map((f) => fs.statSync(path.join(dlDir, f)).size);
+        const got = part.length ? Math.max(...part) : 0;
+        if (got > 0) {
+          job.progress = Math.min(94, 15 + Math.round((got / model.sizeBytes) * 79));
+          job.step = `Đang tải model ${model.label}: ${(got / 1e9).toFixed(2)}/${(model.sizeBytes / 1e9).toFixed(2)} GB...`;
+        }
+      } catch (_) {}
+    }, 2000);
+    try {
+      await pyEnv.run(
+        localLlm.CORE_PYTHON,
+        [
+          '-c',
+          `from huggingface_hub import hf_hub_download; hf_hub_download(${JSON.stringify(model.repo)}, ${JSON.stringify(model.file)}, revision=${JSON.stringify(model.revision)}, local_dir=${JSON.stringify(dir)})`
+        ],
+        { env: { ...pyEnv.uvEnv(), HF_HUB_DISABLE_TELEMETRY: '1', HF_HUB_DISABLE_SYMLINKS_WARNING: '1', PYTHONUTF8: '1' }, timeoutMs: 6 * 3600 * 1000 }
+      );
+    } finally {
+      clearInterval(timer);
+    }
+    job.progress = 95;
+    job.step = 'Đang kiểm tra SHA-256 của model (5,7 GB, khoảng 10–60 giây)...';
+    const file = path.join(dir, model.file);
+    const sha = await computeFileSha256(file);
+    if (sha !== model.sha256) {
+      fs.rmSync(file, { force: true });
+      throw new Error(`Mã SHA-256 của model không khớp (nhận ${sha.slice(0, 16)}…) — đã xóa file hỏng, hãy cài lại.`);
+    }
+    fs.rmSync(path.join(dir, '.cache'), { recursive: true, force: true });
+  }
+}
+
 async function verifyLocalLlm() {
   const st = localLlm.getStatus();
-  if (!st.runtimeInstalled) return { ok: false, error: 'Chưa cài môi trường .venv-llm (mlx-lm).' };
+  if (!st.runtimeInstalled) return { ok: false, error: st.backend === 'llamacpp' ? 'Chưa cài llama.cpp (llama-server.exe) hoặc môi trường Python lõi.' : 'Chưa cài môi trường .venv-llm (mlx-lm).' };
   const installed = st.models.filter((m) => m.installed);
   if (installed.length === 0) return { ok: false, error: 'Chưa tải model Qwen nào.' };
   try {
-    await localLlm.ensureRunning(installed[0].id);
+    const rt = await localLlm.ensureRunning(installed[0].id);
+    // Dịch thử 1 câu thật để chắc chắn model chạy được trên máy này (không chỉ khởi động máy chủ)
+    const t0 = Date.now();
+    const r = await fetch(`${rt.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: rt.modelPath,
+        temperature: 0.2,
+        max_tokens: 64,
+        messages: [
+          { role: 'system', content: 'Dịch câu tiếng Trung sang tiếng Việt. Chỉ trả về bản dịch.' },
+          { role: 'user', content: '大家好，欢迎来到我的频道。' }
+        ]
+      }),
+      signal: AbortSignal.timeout(600000)
+    });
+    const j = await r.json().catch(() => ({}));
+    const text = String((j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '')
+      .replace(/<think>[\s\S]*?<\/think>/g, '')
+      .trim();
     localLlm.stop();
-    return { ok: true, sha256: null, sizeBytes: 0, version: `${installed.map((m) => m.label).join(', ')} (khởi động thử thành công)` };
+    if (!r.ok || !text) return { ok: false, error: `AI Local khởi động được nhưng không dịch được (HTTP ${r.status}): ${JSON.stringify(j).slice(0, 200)}` };
+    return {
+      ok: true,
+      sha256: null,
+      sizeBytes: 0,
+      version: `${installed.map((m) => m.label).join(', ')} — dịch thử: "${text.slice(0, 60)}" (${((Date.now() - t0) / 1000).toFixed(1)} s)`
+    };
   } catch (err) {
     return { ok: false, error: `Không khởi động được AI Local: ${err.message}` };
   }

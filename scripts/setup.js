@@ -3,7 +3,8 @@
  * Cài đặt các thành phần cần thiết sau khi tải mã nguồn (GitHub/Drive) — chạy được trên Windows 10/11 x64 và macOS.
  *
  *   node scripts/setup.js              # gói "core": đủ để tải video + lồng tiếng (hỏi xác nhận trước khi tải)
- *   node scripts/setup.js --full       # thêm AI dịch Local Qwen (chỉ Mac chip Apple, ~5,6 GB)
+ *   node scripts/setup.js --full       # macOS: thêm AI dịch Local Qwen3.5 9B (MLX, ~5,6 GB)
+ *   node scripts/setup.js --no-llm     # Windows: bỏ AI dịch Local Qwen3.5 9B (mặc định có, ~5,8 GB) — dùng Gemini thay thế
  *   node scripts/setup.js --yes        # không hỏi lại
  *   node scripts/setup.js --check      # chỉ kiểm tra, không tải gì (mã thoát 1 nếu thiếu thành phần bắt buộc)
  *
@@ -21,6 +22,8 @@ const args = new Set(process.argv.slice(2));
 const FULL = args.has('--full') || args.has('--profile=full');
 const YES = args.has('--yes') || args.has('-y');
 const CHECK_ONLY = args.has('--check');
+const NO_LLM = args.has('--no-llm');
+const os = require('os');
 
 const IS_MAC_ARM = process.platform === 'darwin' && process.arch === 'arm64';
 
@@ -36,10 +39,12 @@ function plan() {
     { id: 'localTts', why: 'Giọng đọc Piper (dự phòng, nhẹ)' }
   ];
   if (process.platform === 'darwin') core.push({ id: 'webkitSniffer', why: 'Quét Douyin/Kuaishou (cần Xcode Command Line Tools)', optional: true });
-  if (!IS_MAC_ARM) core.push({ id: 'localNmt', why: 'Dịch Offline cơ bản (Argos) cho máy không chạy được AI Local', optional: true });
-  if (FULL) {
-    if (IS_MAC_ARM) core.push({ id: 'localLlmQwen', why: 'AI dịch Local Qwen3.5-9B (~5,6 GB)' });
-    else console.log('ℹ️  AI Local Qwen (MLX) chỉ chạy trên Mac chip Apple — trên máy này hãy dùng Gemini hoặc Ollama/LM Studio.');
+  // Dịch Offline: chỉ cài Qwen3.5 9B — bản tốt nhất đã kiểm nghiệm. Argos, Qwen3.5-4B, Qwen2.5-7B, Whisper tiny/base
+  // đã bị loại vì chất lượng kém (BAO_CAO_NANG_CAP.md) nên KHÔNG cài tự động.
+  if (process.platform === 'win32') {
+    if (!NO_LLM) core.push({ id: 'localLlmQwen', why: 'AI dịch Local Qwen3.5 9B — dịch Trung→Việt ngay trên máy, không cần API Key' });
+  } else if (IS_MAC_ARM && FULL) {
+    core.push({ id: 'localLlmQwen', why: 'AI dịch Local Qwen3.5 9B (~5,6 GB)' });
   }
   return core;
 }
@@ -79,6 +84,11 @@ async function main() {
     console.log(`⚠️  Thư mục dự án nằm khá sâu (${process.cwd().length} ký tự): ${process.cwd()}`);
     console.log('   Windows giới hạn đường dẫn 260 ký tự; một số thư viện Python có đường dẫn rất dài. Nếu cài lỗi,');
     console.log('   hãy chuyển thư mục về đường dẫn ngắn (vd. C:\\CNVideo) hoặc bật "Enable Win32 long paths".\n');
+  }
+  const ramGB = os.totalmem() / 1024 ** 3;
+  if (process.platform === 'win32' && !NO_LLM && ramGB < 15) {
+    console.log(`⚠️  Máy có ${ramGB.toFixed(1)} GB RAM. Qwen3.5 9B cần ~8 GB RAM trống — máy dưới 16 GB sẽ dịch chậm.`);
+    console.log('   Có thể bỏ qua bằng:  node scripts/setup.js --no-llm   (rồi dùng Gemini miễn phí qua AI Studio)\n');
   }
   if (!fs.existsSync(path.join('node_modules', 'express'))) {
     console.error('❌ Chưa cài thư viện Node. Hãy chạy trước:  npm install --omit=dev');
