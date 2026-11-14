@@ -1,0 +1,2 @@
+# Môi trường riêng cho VieNeu-TTS (.venv-vieneu) — SDK chính thức, chạy ONNX Runtime trên CPU.
+vieneu==3.8.4

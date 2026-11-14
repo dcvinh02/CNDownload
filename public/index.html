@@ -1,0 +1,783 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CN Video Scraper Pro — Tải Video, Quét Tài khoản, Chuyển đổi & Lồng tiếng 12 Nền tảng</title>
+  <link rel="icon" type="image/png" href="/icon.png" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img src="/icon.png" alt="App Icon" class="brand-icon-img" />
+      <div>
+        <div class="brand-title">CN Video Scraper Pro</div>
+        <div class="brand-sub">Tải Video 12 Nền tảng • Quét Tài khoản Hàng loạt • Chuẩn hóa Codec • Lồng tiếng Tự động</div>
+      </div>
+    </div>
+
+    <div class="nav-tabs" role="tablist">
+      <button class="nav-tab active" data-tab="single" onclick="switchWorkspaceTab('single')">📥 Tải Video Đơn</button>
+      <button class="nav-tab" data-tab="account" onclick="switchWorkspaceTab('account')">👤 Quét Tài khoản & Tải Hàng loạt</button>
+      <button class="nav-tab" data-tab="dubbing" onclick="switchWorkspaceTab('dubbing')">🎙️ Lồng tiếng Video</button>
+      <button class="nav-tab" data-tab="ai" onclick="switchWorkspaceTab('ai')">🤖 Tích hợp AI</button>
+      <button class="nav-tab" data-tab="capabilities" onclick="switchWorkspaceTab('capabilities')">🛡️ Ma trận Khả năng & OS</button>
+    </div>
+
+    <div class="topbar-actions">
+      <div class="status-badge" id="engineStatusBadge" onclick="switchWorkspaceTab('capabilities')" style="cursor:pointer;" title="Nhấn để xem chi tiết Ma trận Khả năng">
+        <span class="status-dot" id="engineStatusDot"></span>
+        <span id="engineStatusText">Đang kiểm tra công cụ...</span>
+      </div>
+      <button class="btn-outline" id="missingToolsBtn" style="display:none;border-color:#fca5a5;background:#fef2f2;color:#991b1b;" onclick="openToolInstallerModal()">
+        ⚠️ Tải công cụ thiếu (<span id="missingToolsCount">0</span>)
+      </button>
+      <button class="btn-outline" style="border-color:#93c5fd;background:#eff6ff;color:#1d4ed8;" onclick="openConverterModal()">🎞️ Đổi Định dạng</button>
+      <button class="btn-outline" onclick="openStorageModal()">⚙️ Thư mục Lưu</button>
+      <button class="btn-outline" onclick="openDownloadsFolder()">📂 Mở Thư mục</button>
+    </div>
+  </header>
+
+  <div class="workspace">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <span>Chọn nền tảng (Lọc file riêng)</span>
+        <span style="font-size:10px;color:#2563eb;cursor:pointer;" onclick="openStorageModal()">Đổi thư mục</span>
+      </div>
+      <div class="platform-list" id="platformList"></div>
+    </aside>
+
+    <main class="main-area">
+      <!-- ==================== TAB 1: TẢI VIDEO ĐƠN ==================== -->
+      <div id="tabPane_single" class="tab-pane active">
+        <section class="card">
+          <div class="folder-strip">
+            <div style="display:flex;align-items:center;gap:8px;min-width:0;">
+              <span style="font-weight:700;color:#0f172a;white-space:nowrap;">📁 Thư mục lưu hiện tại:</span>
+              <span class="folder-strip-path" id="activePlatformFolder">Đang tải cấu hình...</span>
+            </div>
+            <div style="display:flex;gap:6px;flex-shrink:0;">
+              <button class="btn-sm" onclick="openStorageModal()">Đổi đường dẫn</button>
+              <button class="btn-sm" onclick="openDownloadsFolder()">Mở thư mục</button>
+            </div>
+          </div>
+
+          <div class="search-header">
+            <div class="search-title">Nhập đường dẫn hoặc đoạn văn bản chia sẻ video</div>
+            <span class="badge primary" id="detectedBadge">Chế độ: Tất cả nền tảng (Tự động nhận diện)</span>
+          </div>
+
+          <div class="search-row">
+            <div class="input-box-wrap">
+              <input
+                type="text"
+                id="urlInput"
+                class="url-input"
+                placeholder="Chỉ cần dán 1 link bất kỳ (Douyin, Kuaishou, Bilibili.com/Bilibili.tv, Xiaohongshu, Youku, Pipixia...)"
+                autocomplete="off"
+              />
+              <button class="paste-btn" onclick="pasteClipboard()">📋 Dán</button>
+            </div>
+            <button class="btn-primary" id="analyzeBtn" onclick="analyzeVideo()">
+              <span class="spinner" id="analyzeSpin"></span>
+              <span id="analyzeText">Trích xuất & Tải</span>
+            </button>
+          </div>
+
+          <div class="method-bar">
+            <div class="method-group">
+              <span class="method-label">Phương thức xử lý:</span>
+              <button class="method-pill active" data-method="auto" onclick="selectMethod('auto', this)">✨ Tự động (Khuyên dùng - Tự dò Link + UTM + oEmbed)</button>
+              <button class="method-pill" data-method="link" onclick="selectMethod('link', this)">🔗 Direct Link</button>
+              <button class="method-pill" data-method="utm" onclick="selectMethod('utm', this)">📱 Auto-UTM Mobile API</button>
+              <button class="method-pill" data-method="oembed" onclick="selectMethod('oembed', this)">🖼️ Auto-oEmbed Player</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- Khung Kết quả & Xem trước cỡ lớn -->
+        <section class="card result-card" id="resultCard">
+          <div class="result-grid">
+            <div>
+              <div class="preview-stage" id="previewStage"></div>
+            </div>
+
+            <div class="meta-col">
+              <div class="meta-badges">
+                <span class="badge primary" id="resPlatformTag">Platform</span>
+                <span class="badge" id="resStrategyTag">Strategy</span>
+                <span class="badge" id="resMethodTag">Method</span>
+                <span class="badge" id="resIdTag">ID</span>
+              </div>
+
+              <div class="video-title" id="resTitle">—</div>
+
+              <div class="stats-grid">
+                <div class="stat-box">
+                  <div class="stat-label">Tác giả / Kênh</div>
+                  <div class="stat-val" id="resAuthor">—</div>
+                </div>
+                <div class="stat-box">
+                  <div class="stat-label">Thời lượng</div>
+                  <div class="stat-val" id="resDuration">00:00</div>
+                </div>
+                <div class="stat-box">
+                  <div class="stat-label">Lượt xem / Thả tim</div>
+                  <div class="stat-val"><span id="resViews">0</span> / <span id="resLikes">0</span></div>
+                </div>
+                <div class="stat-box">
+                  <div class="stat-label">Bình luận</div>
+                  <div class="stat-val" id="resComments">0</div>
+                </div>
+              </div>
+
+              <div>
+                <div class="section-subtitle">
+                  <span>🔗 Hệ thống tự động trích xuất & tổng hợp từ link gốc</span>
+                  <span style="font-size:11px;color:#64748b;">Lưu vào: <strong id="resSaveFolder"></strong></span>
+                </div>
+                <div class="synth-box" id="synthesizedLinksBox"></div>
+              </div>
+
+              <div class="streams-section">
+                <div class="section-subtitle">
+                  <span>Danh sách luồng Video / Chất lượng thực tế</span>
+                  <span id="streamCountLabel" style="color: var(--primary)">0 luồng</span>
+                </div>
+                <div class="streams-list" id="streamsList"></div>
+              </div>
+
+              <div class="action-buttons">
+                <select id="downloadFormatSelect" class="format-select" title="Chọn định dạng file muốn tải về (Có xác minh media trước khi hoàn tất)">
+                  <option value="mp4">Định dạng tải: .MP4 (Chuẩn H.264 + AAC • Đã xác minh)</option>
+                  <option value="mov">Định dạng tải: .MOV (Apple QuickTime)</option>
+                  <option value="mkv">Định dạng tải: .MKV (Matroska Video)</option>
+                  <option value="webm">Định dạng tải: .WEBM (Web Video VP9)</option>
+                  <option value="avi">Định dạng tải: .AVI</option>
+                  <option value="mp3">Định dạng tải: .MP3 (Chỉ tách Nhạc 320kbps)</option>
+                  <option value="wav">Định dạng tải: .WAV (Âm thanh Lossless)</option>
+                  <option value="gif">Định dạng tải: .GIF (Ảnh động)</option>
+                </select>
+                <button class="btn-download" id="downloadMainBtn" onclick="triggerDownload()">
+                  <span>⬇️ Tải về Thư mục Nền tảng</span>
+                </button>
+                <button class="btn-outline" onclick="exportMetadataJson()">📄 Lưu JSON</button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- ==================== TAB 2: QUÉT TÀI KHOẢN & TẢI HÀNG LOẠT ==================== -->
+      <div id="tabPane_account" class="tab-pane">
+        <section class="card">
+          <div class="search-header">
+            <div>
+              <div class="search-title">👤 Quét Danh sách Video của Tài khoản Người dùng</div>
+              <div style="font-size:12px;color:#64748b;margin-top:2px;">
+                Nhận diện hồ sơ trước khi quét • Phân trang có kiểm soát tốc độ • Chống trùng lặp • Tải hàng loạt giới hạn luồng đồng thời
+              </div>
+            </div>
+            <span class="badge primary" id="accSupportBadge">Kiểm tra hỗ trợ trung thực theo nền tảng</span>
+          </div>
+
+          <div class="account-scan-form">
+            <select id="accPlatformSelect" class="format-select" style="height:42px;">
+              <option value="auto">Tự nhận diện nền tảng</option>
+              <option value="bilibili">Bilibili (Đã kiểm tra)</option>
+              <option value="douyin">Douyin (Có điều kiện)</option>
+              <option value="kuaishou">Kuaishou (Có điều kiện)</option>
+              <option value="xiaohongshu">Xiaohongshu (Có điều kiện)</option>
+              <option value="xigua">Xigua Video (Có điều kiện)</option>
+              <option value="pipixia">Pipixia (Chưa hỗ trợ quét TK)</option>
+              <option value="youku">Youku (Chưa hỗ trợ quét TK)</option>
+              <option value="tencent">Tencent Video (Chưa hỗ trợ quét TK)</option>
+              <option value="iqiyi">iQIYI (Chưa hỗ trợ quét TK)</option>
+              <option value="mangotv">MangoTV (Chưa hỗ trợ quét TK)</option>
+              <option value="wetv">WeTV (Chưa hỗ trợ quét TK)</option>
+              <option value="jianying">Jianying (Chưa hỗ trợ quét TK)</option>
+            </select>
+            <input
+              type="text"
+              id="accInputUrl"
+              class="url-input"
+              style="height:42px;padding-right:14px;"
+              placeholder="Nhập URL trang tài khoản hoặc UID (VD: https://space.bilibili.com/396427034 hoặc link chủ trang Douyin/Kuaishou...)"
+            />
+            <button class="btn-outline" style="height:42px;" onclick="previewAccount()">🔍 1. Nhận diện Hồ sơ</button>
+            <button class="btn-primary" style="height:42px;" id="accStartScanBtn" onclick="startAccountScan(false)">🚀 2. Quét Video</button>
+          </div>
+
+          <!-- Tùy chọn xác thực Cookie an toàn (Hỗ trợ Cookie Header, Netscape, JSON • Không lưu vào log) -->
+          <div style="margin-top:10px;padding:12px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+              <label style="display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;color:#334155;cursor:pointer;">
+                <input type="checkbox" id="accConsentCookieCheck" onchange="toggleAccountCookieBox()" />
+                <span>🔐 Cung cấp Cookie phiên cho lượt quét này (Chỉ giữ trong phiên, không ghi log/metadata, chỉ gửi tới đúng miền nền tảng)</span>
+              </label>
+              <span style="font-size:11px;color:#64748b;">Số trang quét tối đa: <input type="number" id="accMaxPages" value="2" min="1" max="10" style="width:48px;padding:2px 5px;border:1px solid #cbd5e1;border-radius:4px;" /></span>
+            </div>
+            <div id="accCookieInputWrap" style="display:none;margin-top:8px;">
+              <div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap;">
+                <textarea id="accCookieInput" rows="2" class="folder-input cookie-textarea masked" placeholder="Dán Cookie Douyin/Bilibili (Header: sessionid=...; ttwid=..., hoặc Netscape cookies.txt nhiều dòng có #HttpOnly_, hoặc JSON / cURL)..."></textarea>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                  <button class="btn-sm" type="button" onclick="toggleCookieVisibility()">👁️ Hiện/Ẩn</button>
+                  <button class="btn-sm" type="button" onclick="validateCurrentCookieInput()">🔍 Kiểm tra Cookie</button>
+                </div>
+              </div>
+              <div id="accCookieStatusHint" style="font-size:11px;color:#64748b;margin-top:5px;line-height:1.4;"></div>
+            </div>
+          </div>
+
+          <!-- Khung hiển thị Hồ sơ nhận diện trước khi quét -->
+          <div id="accPreviewBox" style="display:none;margin-top:12px;padding:12px 14px;border-radius:10px;border:1px solid #cbd5e1;background:#fff;"></div>
+
+          <!-- Thanh trạng thái tiến trình quét tài khoản -->
+          <div id="accScanStatusBar" style="display:none;margin-top:12px;padding:10px 14px;border-radius:9px;background:#eff6ff;border:1px solid #bfdbfe;">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+              <div>
+                <div style="font-size:12.5px;font-weight:700;color:#1e40af;" id="accScanTitleText">Đang quét...</div>
+                <div style="font-size:11.5px;color:#3b82f6;margin-top:2px;" id="accScanSubText"></div>
+              </div>
+              <div style="display:flex;gap:6px;">
+                <button class="btn-sm" id="accContinueScanBtn" onclick="continueAccountScan()">➕ Quét tiếp trang sau</button>
+                <button class="btn-sm" onclick="startAccountScan(true)">🔄 Làm mới</button>
+                <button class="btn-danger-sm" id="accCancelScanBtn" onclick="cancelAccountScan()">⏹ Hủy quét</button>
+              </div>
+            </div>
+            <div class="progress-bar" style="width:100%;margin-top:8px;">
+              <div class="progress-fill" id="accScanProgressFill" style="width:0%"></div>
+            </div>
+            <details id="accScanLogDetails" style="margin-top:8px;">
+              <summary style="font-size:11.5px;cursor:pointer;color:#1e40af;">📜 Nhật ký quét (đã ẩn Cookie/Token)</summary>
+              <pre id="accScanLogBox" class="scan-log-box"></pre>
+            </details>
+          </div>
+
+          <!-- Quét nhiều tài khoản tuần tự -->
+          <details class="multi-scan-panel" id="accMultiScanPanel">
+            <summary>👥 Quét nhiều tài khoản cùng lúc (mỗi dòng 1 link/UID — chạy tuần tự, nghỉ 2.5 giây giữa các tài khoản)</summary>
+            <div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap;margin-top:8px;">
+              <textarea id="accMultiInput" rows="4" class="folder-input" style="flex:1 1 360px;min-height:80px;" placeholder="https://space.bilibili.com/946974&#10;https://www.douyin.com/user/MS4wLjABAAAA...&#10;..."></textarea>
+              <div style="display:flex;flex-direction:column;gap:6px;">
+                <button class="btn-primary" style="height:36px;" onclick="startMultiAccountScanUi()">🚀 Quét danh sách</button>
+                <button class="btn-danger-sm" onclick="cancelMultiAccountScanUi()">⏹ Dừng</button>
+              </div>
+            </div>
+            <div style="font-size:11px;color:#64748b;margin-top:4px;">Dùng chung lựa chọn nền tảng, số trang và Cookie ở trên. Cookie chỉ được gửi tới đúng miền của từng nền tảng.</div>
+            <div id="accMultiResults" class="downloads-list" style="margin-top:8px;"></div>
+          </details>
+        </section>
+
+        <!-- Danh sách video của tài khoản có Tìm kiếm, Sắp xếp, Lọc, Chọn & Tải hàng loạt -->
+        <section class="card" id="accVideoListCard">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px;">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+              <input type="text" id="accSearchInput" class="folder-input" style="width:230px;height:32px;" placeholder="🔎 Tìm theo tiêu đề hoặc mã ID..." oninput="renderAccountVideos()" />
+              <select id="accFilterStatus" class="folder-input" style="width:175px;height:32px;" onchange="renderAccountVideos()">
+                <option value="all">Lọc: Tất cả video</option>
+                <option value="downloadable">Chỉ video tải được</option>
+                <option value="restricted">Video giới hạn / VIP</option>
+              </select>
+              <select id="accSortBy" class="folder-input" style="width:185px;height:32px;" onchange="renderAccountVideos()">
+                <option value="newest">Sắp xếp: Mới nhất trước</option>
+                <option value="views">Sắp xếp: Lượt xem cao nhất</option>
+                <option value="duration">Sắp xếp: Thời lượng dài nhất</option>
+              </select>
+            </div>
+
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+              <button class="btn-sm" onclick="selectAllDownloadableAccountVideos()">☑️ Chọn tất cả tải được</button>
+              <button class="btn-sm" onclick="deselectAllAccountVideos()">⬜ Bỏ chọn</button>
+              <span class="badge primary" id="accSelectedCountBadge">Đã chọn: 0</span>
+            </div>
+          </div>
+
+          <!-- Thanh điều khiển Hàng đợi Tải hàng loạt -->
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;padding:10px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:12px;">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+              <span style="font-size:12px;font-weight:700;color:#0f172a;">📦 Tải hàng loạt:</span>
+              <select id="accBatchFormat" class="folder-input" style="width:165px;height:32px;">
+                <option value="mp4">Định dạng: .MP4 (H.264)</option>
+                <option value="mov">Định dạng: .MOV</option>
+                <option value="mkv">Định dạng: .MKV</option>
+                <option value="mp3">Định dạng: .MP3 (Âm thanh)</option>
+              </select>
+              <label style="font-size:12px;color:#334155;">Số tác vụ đồng thời:
+                <select id="accBatchConcurrency" class="folder-input" style="width:65px;height:32px;display:inline-block;">
+                  <option value="1">1</option>
+                  <option value="2" selected>2</option>
+                  <option value="3">3</option>
+                </select>
+              </label>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span id="batchQueueBadge" style="font-size:11.5px;color:#64748b;">Hàng đợi: 0 chờ • 0 đang chạy</span>
+              <button class="btn-sm" onclick="clearBatchQueue()">🧹 Xóa hàng chờ</button>
+              <button class="btn-download" style="height:34px;padding:0 14px;font-size:12.5px;" onclick="enqueueSelectedAccountVideos()">
+                ⬇️ Tải các video đã chọn
+              </button>
+            </div>
+          </div>
+
+          <div id="accVideosContainer" class="downloads-list">
+            <div class="empty-hint">Hãy nhập URL trang tài khoản ở trên và nhấn "Nhận diện Hồ sơ" hoặc "Quét Video".</div>
+          </div>
+        </section>
+      </div>
+
+      <!-- ==================== TAB 3: LỒNG TIẾNG VIDEO ĐÃ TẢI (DUBBING STUDIO) ==================== -->
+      <div id="tabPane_dubbing" class="tab-pane">
+        <section class="card">
+          <div class="search-header">
+            <div>
+              <div class="search-title">🎙️ Phòng Thu Lồng Tiếng Video Tự Động (Local-First Dubbing Studio)</div>
+              <div style="font-size:12px;color:#64748b;margin-top:2px;">
+                Giữ nguyên video gốc • Xuất bản lồng tiếng sang thư mục riêng <code>Dubbed/</code> • Căn chỉnh thời gian từng câu (Time-Stretch) • Tự giảm tiếng nền (Auto-Ducking)
+              </div>
+            </div>
+            <span class="badge primary">Không ghi đè file gốc</span>
+          </div>
+
+          <!-- Thanh tóm tắt Tài nguyên Local thu gọn mặc định (Chỉ mở rộng khi cần hoặc thiếu mô hình) -->
+          <div id="dubResourcesBar" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:9px 12px;margin-bottom:12px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+              <div id="dubResourcesSummaryText" style="font-size:12px;font-weight:600;color:#334155;">
+                💻 Tài nguyên AI Local trên máy: Đang kiểm tra...
+              </div>
+              <button type="button" class="btn-sm" id="dubToggleResourcesBtn" onclick="toggleDubResources()">🔽 Xem tài nguyên</button>
+            </div>
+            <div id="dubResourcesDetailBody" style="display:none;margin-top:10px;">
+              <div id="dubLocalModelsGrid" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(230px, 1fr));gap:8px;"></div>
+            </div>
+          </div>
+
+          <!-- Tùy chọn Bộ dịch, Văn phong & Cho phép Dịch vụ Đám mây -->
+          <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;margin-bottom:14px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
+              <label style="display:flex;align-items:center;gap:7px;font-size:12px;font-weight:600;color:#1e40af;cursor:pointer;">
+                <input type="checkbox" id="dubCloudConsentCheck" onchange="onChangeTranslationProvider()" />
+                <span>☁️ Cho phép gửi văn bản phân đoạn lên dịch vụ đám mây (Dịch tự nhiên hơn / Cloud Voice • Mặc định TẮT)</span>
+              </label>
+            </div>
+            <div class="dubbing-controls-row" style="margin-top:8px;margin-bottom:0;">
+              <div class="dub-ctrl-col">
+                <div style="font-size:11.5px;font-weight:700;color:#334155;margin-bottom:4px;">🌐 Bộ máy dịch thuật:</div>
+                <select id="dubTranslationProviderSelect" class="folder-input" style="height:34px;" onchange="onChangeTranslationProvider()">
+                  <option value="auto">Tự động (Offline nếu chưa cho phép Cloud / AI nếu đã cấu hình)</option>
+                  <option value="local">🔒 Offline trên máy (AI Local Qwen; Argos nếu chưa cài Qwen)</option>
+                  <option value="cloud_google">☁️ Google Translate (miễn phí, cần cho phép Cloud)</option>
+                  <option value="ai_local_qwen">💻 AI Local Qwen (trên máy, không cần API Key)</option>
+                  <option value="ai">🤖 AI Text theo cấu hình (tab Tích hợp AI, có dự phòng)</option>
+                  <option value="ai_gemini">✨ Google Gemini API</option>
+                  <option value="ai_openai">🤖 OpenAI ChatGPT API</option>
+                  <option value="ai_openai_compatible">🔌 API tương thích OpenAI (DeepSeek, Groq...)</option>
+                </select>
+              </div>
+              <div class="dub-ctrl-col" id="dubAiModelCol" style="display:none;">
+                <div style="font-size:11.5px;font-weight:700;color:#334155;margin-bottom:4px;">🧠 Model AI:</div>
+                <select id="dubAiModelSelect" class="folder-input" style="height:34px;" onchange="renderDubAiStatusLine()"></select>
+              </div>
+              <div class="dub-ctrl-col" style="max-width:250px;">
+                <div style="font-size:11.5px;font-weight:700;color:#334155;margin-bottom:4px;">✍️ Văn phong bản dịch:</div>
+                <select id="dubTranslationStyleSelect" class="folder-input" style="height:34px;">
+                  <option value="natural">Khẩu ngữ tự nhiên (Lồng tiếng chuẩn)</option>
+                  <option value="review">Review / Chuyên nghiệp (Gọn, rõ ý)</option>
+                  <option value="story">Kể chuyện / Thuyết minh (Mượt mà)</option>
+                </select>
+              </div>
+            </div>
+            <div id="dubAiStatusLine" class="ai-status-line" style="display:none;"></div>
+          </div>
+
+          <!-- Bước 1: Chọn Video đã tải, Ngôn ngữ đích & Giọng đọc -->
+          <div class="dubbing-controls-row">
+            <div class="dub-ctrl-col">
+              <div style="font-size:12px;font-weight:700;margin-bottom:5px;">1. Chọn Video đã tải cần lồng tiếng:</div>
+              <select id="dubVideoSelect" class="folder-input" style="height:36px;" onchange="onSelectDubVideo()">
+                <option value="">-- Chọn video từ danh sách đã tải --</option>
+              </select>
+            </div>
+            <div class="dub-ctrl-col" style="max-width:210px;">
+              <div style="font-size:12px;font-weight:700;margin-bottom:5px;">2. Ngôn ngữ đầu ra:</div>
+              <select id="dubTargetLangSelect" class="folder-input" style="height:36px;" onchange="onChangeDubLanguage()">
+                <option value="vi">Tiếng Việt (Vietnamese)</option>
+                <option value="en">Tiếng Anh (English)</option>
+                <option value="zh">Tiếng Trung (Chinese)</option>
+                <option value="ja">Tiếng Nhật (Japanese)</option>
+                <option value="ko">Tiếng Hàn (Korean)</option>
+              </select>
+            </div>
+            <div class="dub-ctrl-col">
+              <div style="font-size:12px;font-weight:700;margin-bottom:5px;">3. Chọn Giọng đọc (Có giọng đề xuất mặc định):</div>
+              <select id="dubVoiceSelect" class="folder-input" style="height:36px;" onchange="onVoiceSelectionChange()"></select>
+            </div>
+            <div class="dubbing-actions-wrap">
+              <button class="btn-outline" style="height:36px;" onclick="previewSelectedVoice()">🔊 Nghe thử giọng</button>
+              <button class="btn-outline" style="height:36px;border-color:#93c5fd;background:#eff6ff;color:#1d4ed8;" onclick="extractScriptFromSelectedVideo()">📝 Phân đoạn & Dịch (ASR)</button>
+            </div>
+          </div>
+          <div id="dubExtractMonitor" class="extract-monitor" style="display:none;">
+            <div class="extract-monitor-head">
+              <strong id="dubExtractTitle">📝 Phân đoạn & Dịch</strong>
+              <div style="display:flex;gap:6px;align-items:center;">
+                <span id="dubExtractElapsed" style="font-size:11px;color:#64748b;"></span>
+                <button type="button" class="btn-danger-sm" id="dubExtractCancelBtn" onclick="cancelExtractTaskUi()">⏹ Hủy</button>
+                <button type="button" class="btn-icon-sm" onclick="document.getElementById('dubExtractMonitor').style.display='none'" title="Ẩn">✕</button>
+              </div>
+            </div>
+            <div class="progress-bar" style="margin:6px 0;"><div class="progress-fill" id="dubExtractProgressFill" style="width:0%"></div></div>
+            <div id="dubExtractMessage" style="font-size:12px;color:#334155;margin-bottom:6px;"></div>
+            <div id="dubExtractStages" class="extract-stages"></div>
+            <div id="dubExtractIssues"></div>
+          </div>
+          <div class="dub-diarize-row">
+            <label class="dub-check-label">
+              <input type="checkbox" id="dubAutoDiarizeCheck" checked />
+              <span>🗣️ Tự nhận diện người nói khi phân đoạn (mỗi người một giọng lồng tiếng)</span>
+            </label>
+            <label style="font-size:12px;color:#334155;">Số người nói:
+              <input type="number" id="dubNumSpeakersInput" min="0" max="20" value="0" class="folder-input" style="width:64px;height:28px;display:inline-block;" title="0 = tự động" />
+              <span style="color:#64748b;">(0 = tự động)</span>
+            </label>
+          </div>
+          <div id="selectedVoiceDetailBox" style="display:none;margin-bottom:12px;padding:9px 12px;border-radius:8px;background:#f1f5f9;border:1px solid #cbd5e1;font-size:11.5px;color:#334155;"></div>
+
+          <audio id="voicePreviewAudio" controls style="display:none;width:100%;height:32px;margin-bottom:12px;"></audio>
+
+          <!-- Bước 2: Điều khiển Âm lượng riêng cho Tiếng gốc & Tiếng lồng tiếng + Auto-Ducking -->
+          <div class="dub-volume-panel">
+            <div class="dub-vol-col">
+              <div class="dub-vol-head">
+                <span id="dubOrigVolTitle">🔉 Âm lượng nhạc nền gốc</span>
+                <span id="dubOrigVolLabel" class="dub-vol-value">80%</span>
+              </div>
+              <input type="range" id="dubOrigVolSlider" min="0" max="2" step="0.05" value="0.8" oninput="onDubVolumeInput()" />
+              <div class="dub-vol-actions">
+                <button type="button" class="btn-sm" onclick="setDubVolume('orig', 0)">🔇 Tắt tiếng gốc</button>
+                <button type="button" class="btn-sm" onclick="setDubVolume('orig', 1)" title="Đưa về đúng mức âm lượng của video gốc">↺ Khôi phục 100%</button>
+              </div>
+            </div>
+            <div class="dub-vol-col">
+              <div class="dub-vol-head">
+                <span>🔊 Âm lượng giọng lồng tiếng</span>
+                <span id="dubVoiceVolLabel" class="dub-vol-value">100%</span>
+              </div>
+              <input type="range" id="dubVoiceVolSlider" min="0" max="2" step="0.05" value="1.0" oninput="onDubVolumeInput()" />
+              <div class="dub-vol-actions">
+                <button type="button" class="btn-sm" onclick="setDubVolume('dub', 0)">🔇 Tắt giọng lồng</button>
+                <button type="button" class="btn-sm" onclick="setDubVolume('dub', 1)">↺ Mặc định 100%</button>
+              </div>
+            </div>
+            <div class="dub-vol-col">
+              <label class="dub-check-label" title="Tách giọng nói gốc khỏi nhạc nền bằng AI (Spleeter, offline). Người xem chỉ nghe giọng lồng tiếng + nhạc nền/tiếng động gốc.">
+                <input type="checkbox" id="dubRemoveVoiceCheck" checked onchange="onRemoveVoiceToggle()" />
+                <span>🎼 Loại bỏ giọng nói gốc, chỉ giữ nhạc nền & tiếng động (đề xuất)</span>
+              </label>
+              <label class="dub-check-label">
+                <input type="checkbox" id="dubAutoDuckingCheck" checked onchange="onDubVolumeInput()" />
+                <span>🎚️ Giảm thêm tiếng gốc khi có lời lồng tiếng (Auto-Ducking)</span>
+              </label>
+              <div class="dub-vol-head" style="margin-top:6px;">
+                <span>Mức tiếng gốc lúc có lời</span>
+                <span id="dubDuckLevelLabel" class="dub-vol-value">35%</span>
+              </div>
+              <input type="range" id="dubDuckLevelSlider" min="0" max="1" step="0.05" value="0.35" oninput="onDubVolumeInput()" />
+              <div class="dub-vol-head" style="margin-top:6px;">
+                <span>Tốc độ đọc tối đa khi câu dịch dài</span>
+                <select id="dubMaxTempoSelect" class="folder-input" style="height:28px;width:auto;min-width:150px;">
+                  <option value="1.15">1.15x (ít méo)</option>
+                  <option value="1.3" selected>1.3x (đề xuất)</option>
+                  <option value="1.45">1.45x</option>
+                  <option value="1.6">1.6x (nhanh)</option>
+                </select>
+              </div>
+            </div>
+            <div id="dubVolumeSummary" class="dub-volume-summary"></div>
+          </div>
+
+          <!-- Bước 3: Bảng phân đoạn kịch bản & dịch theo thời gian -->
+          <div style="margin-bottom:14px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:6px;">
+              <div style="font-size:12.5px;font-weight:700;color:#0f172a;">
+                ⏱️ Các đoạn lời thoại theo mốc thời gian thực tế từ ASR (Tự động căn chỉnh tốc độ đọc):
+              </div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                <span id="dubSourceLangBadge" class="badge">Ngôn ngữ nguồn: Tự nhận diện</span>
+                <button type="button" class="btn-sm" id="dubRetranslateBtn" onclick="retranslateCurrentSegments()">🔄 Dịch lại lời thoại</button>
+                <button type="button" class="btn-sm" onclick="addDubSegmentRow()">➕ Thêm đoạn thoại</button>
+              </div>
+            </div>
+            <div id="dubSpeakerVoicesWrap" class="dub-speaker-voices" style="display:none;"></div>
+            <div class="dub-seg-row dub-seg-header">
+              <span>Bắt đầu (s)</span><span>Kết thúc (s)</span><span>Người nói</span><span>Lời thoại gốc</span><span>Lời dịch (sẽ đọc)</span><span></span>
+            </div>
+            <div id="dubSegmentsWrap" style="max-height:320px;overflow-y:auto;border:1px solid #e2e8f0;border-radius:8px;padding:8px;background:#fff;">
+              <div class="empty-hint" style="padding:12px;">Nhấn "📝 Phân đoạn & Dịch (ASR)" để nhận diện lời thoại thực tế từ âm thanh video, hoặc nhấn "➕ Thêm đoạn thoại".</div>
+            </div>
+          </div>
+
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+            <div style="font-size:12px;color:#64748b;">
+              Bản lồng tiếng sẽ được xuất thành file mới trong thư mục con <code>Dubbed/</code> kèm file <code>.dubbing.metadata.json</code> (Tuyệt đối không ghi đè video gốc).
+            </div>
+            <div style="display:flex;gap:8px;">
+              <button class="btn-download" style="padding:0 20px;" onclick="startDubbingProcess()">
+                🎙️ Bắt đầu Lồng tiếng & Lưu File Mới
+              </button>
+            </div>
+          </div>
+
+          <!-- Thanh hiển thị tiến độ 5 bước quy trình lồng tiếng rõ ràng -->
+          <div id="dubPipelineStepsWrap" style="display:none;margin-top:14px;padding:14px 16px;border-radius:10px;background:#f8fafc;border:1px solid #cbd5e1;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+              <div style="font-size:13px;font-weight:700;color:#0f172a;">
+                🎙️ Trạng thái quy trình lồng tiếng 5 bước (Chạy trực tiếp trên máy, không dùng kết quả giả):
+              </div>
+              <button class="btn-danger-sm" id="dubCancelActiveBtn" onclick="cancelActiveDubbingJob()" style="display:none;">⏹ Hủy lồng tiếng</button>
+            </div>
+            <div id="dubStepsList" style="display:flex;flex-direction:column;gap:6px;"></div>
+            <div class="progress-bar" style="margin-top:10px;height:8px;">
+              <div class="progress-fill" id="dubJobProgressFill" style="width:0%"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Danh sách tiến trình & lịch sử lồng tiếng -->
+        <section class="card">
+          <div class="section-subtitle">
+            <span>Tiến trình & Các bản Video đã Lồng tiếng</span>
+            <span id="dubJobsStatLabel" style="font-size:11.5px;color:#64748b;">0 tác vụ</span>
+          </div>
+          <div id="dubJobsList" class="downloads-list">
+            <div class="empty-hint">Chưa có tác vụ lồng tiếng nào.</div>
+          </div>
+        </section>
+      </div>
+
+      <!-- ==================== TAB: TÍCH HỢP AI (AI PROVIDER MANAGER) ==================== -->
+      <div id="tabPane_ai" class="tab-pane">
+        <section class="card">
+          <div class="search-header">
+            <div>
+              <div class="search-title">🤖 Tích hợp AI — Quản lý nhà cung cấp & model</div>
+              <div style="font-size:12px;color:#64748b;margin-top:2px;">
+                API Key chỉ lưu trên máy này (<code>config/ai_secrets.json</code>, quyền 0600), không bao giờ hiển thị lại trên giao diện và không ghi vào log.
+                Văn bản chỉ được gửi tới nhà cung cấp AI khi bạn bật "Cho phép gửi văn bản lên dịch vụ đám mây" ở tab Lồng tiếng.
+              </div>
+            </div>
+            <button type="button" class="btn-sm" onclick="loadAiConfig()">🔄 Làm mới</button>
+          </div>
+
+          <div class="section-subtitle" style="margin-top:4px;"><span>⚙️ Chọn AI cho từng chức năng</span></div>
+          <div id="aiFeaturesWrap" class="ai-features-wrap"></div>
+
+          <div class="section-subtitle" style="margin-top:14px;"><span>🔌 Nhà cung cấp AI</span><span id="aiMonthLabel" style="font-size:11.5px;color:#64748b;"></span></div>
+          <div id="aiProvidersGrid" class="ai-providers-grid">
+            <div class="empty-hint">Đang tải cấu hình AI...</div>
+          </div>
+
+          <details class="multi-scan-panel" style="margin-top:14px;" ontoggle="if(this.open) loadAiLogs()">
+            <summary>📜 Nhật ký AI Gateway (lỗi, chuyển dự phòng, đổi model) — đã ẩn API Key</summary>
+            <div style="display:flex;justify-content:flex-end;margin:6px 0;"><button type="button" class="btn-sm" onclick="loadAiLogs()">🔄 Làm mới</button></div>
+            <pre id="aiLogsBox" class="scan-log-box" style="max-height:260px;"></pre>
+          </details>
+        </section>
+      </div>
+
+      <!-- ==================== TAB 4: MA TRẬN KHẢ NĂNG & TRẠNG THÁI CÔNG CỤ (CAPABILITIES) ==================== -->
+      <div id="tabPane_capabilities" class="tab-pane">
+        <section class="card">
+          <div class="search-header">
+            <div>
+              <div class="search-title">🛡️ Trạng thái Thực tế của Công cụ & Binary trên Hệ điều hành</div>
+              <div style="font-size:12px;color:#64748b;margin-top:2px;">
+                Kiểm tra trực tiếp file thực thi, quyền chạy (<code>X_OK</code>), phiên bản và lỗi khởi động — Không gán cứng trạng thái "Sẵn sàng"
+              </div>
+            </div>
+            <button class="btn-sm" onclick="openToolInstallerModal()">🧰 Quản lý & cài công cụ / mô hình AI</button>
+            <button class="btn-sm" onclick="loadCapabilitiesMatrix(true)">🔄 Kiểm tra lại Binary</button>
+          </div>
+          <div id="missingToolsBanner" style="display:none;margin-bottom:12px;padding:12px 14px;border-radius:10px;background:#fef2f2;border:1px solid #fca5a5;">
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+              <div>
+                <div style="font-size:13px;font-weight:700;color:#991b1b;">⚠️ Phát hiện công cụ / mô hình AI còn thiếu trên hệ thống:</div>
+                <div style="font-size:12px;color:#b91c1c;margin-top:2px;" id="missingToolsBannerText"></div>
+              </div>
+              <button class="btn-primary" style="height:34px;background:#dc2626;border-color:#dc2626;" onclick="openToolInstallerModal()">
+                📦 Tải & Cài đặt Công cụ còn thiếu
+              </button>
+            </div>
+          </div>
+          <div id="toolsProbeGrid" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(260px, 1fr));gap:10px;"></div>
+        </section>
+
+        <section class="card">
+          <div class="search-header">
+            <div>
+              <div class="search-title">📊 Ma trận Khả năng theo 12 Nền tảng & Hệ điều hành (macOS / Windows)</div>
+              <div style="font-size:12px;color:#64748b;margin-top:2px;">
+                Phân loại minh bạch: <strong>Đã kiểm tra</strong> • <strong>Có điều kiện</strong> • <strong>Chưa hỗ trợ</strong> • <strong>Công cụ còn thiếu</strong>
+              </div>
+            </div>
+            <div id="capSummaryBadges" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+          </div>
+          <div style="overflow-x:auto;">
+            <table class="storage-table" id="capMatrixTable">
+              <thead>
+                <tr>
+                  <th>Nền tảng</th>
+                  <th>Trạng thái trên máy hiện tại</th>
+                  <th>Hỗ trợ macOS</th>
+                  <th>Hỗ trợ Windows</th>
+                  <th>Tải Video Đơn</th>
+                  <th>Quét Tài khoản</th>
+                  <th>Ghi chú kỹ thuật & Điều kiện</th>
+                </tr>
+              </thead>
+              <tbody id="capMatrixRows"></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <!-- ==================== DANH SÁCH TIẾN TRÌNH TẢI & FILE CÓ SẴN (HIỂN THỊ CHUNG) ==================== -->
+      <section class="card">
+        <div class="section-subtitle" style="margin-bottom: 6px;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span id="dlSectionTitle">Tiến trình tải & Video có sẵn (Tất cả nền tảng)</span>
+            <span class="badge primary" id="dlFilterBadge">Đang hiện: Tất cả</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span id="dlStatLabel" style="font-weight: 500; color: var(--text-muted)">0 đang tải</span>
+            <button class="btn-sm" id="showAllFilterBtn" style="display:none;" onclick="selectPlatform('auto')">Hiện tất cả 12 nền tảng</button>
+          </div>
+        </div>
+        <div class="downloads-list" id="downloadsList">
+          <div class="empty-hint">Chưa có lịch sử tải xuống.</div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Modal 1: Công cụ Chuyển đổi Định dạng Video / Audio (FFmpeg Converter) -->
+  <div class="modal-backdrop" id="converterModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div>
+          <div style="font-size:15px;font-weight:700;">🎞️ Công cụ Chuyển đổi Định dạng Video & Tách Nhạc (Có Xác minh Media)</div>
+          <div style="font-size:12px;color:#64748b;">Chỉ báo hoàn tất khi file đích đúng định dạng, có kích thước hợp lệ và vượt qua bước giải mã FFmpeg. Giữ nguyên file gốc nếu lỗi/hủy.</div>
+        </div>
+        <button class="btn-sm" onclick="closeConverterModal()">✕ Đóng</button>
+      </div>
+      <div class="modal-body">
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:14px;">
+          <div style="font-size:12.5px;font-weight:700;margin-bottom:8px;">1. Chọn File Nguồn (Chọn từ video đã tải hoặc chọn file bất kỳ trên máy tính):</div>
+          <div style="display:flex;gap:8px;margin-bottom:8px;">
+            <select id="convSavedFileSelect" class="folder-input" style="height:34px;" onchange="onSelectSavedFileForConvert(this.value)">
+              <option value="">-- Chọn nhanh từ danh sách video đã tải --</option>
+            </select>
+            <button class="btn-sm" style="height:34px;" onclick="browseFileForConvert()">📂 Chọn file từ máy tính...</button>
+          </div>
+          <input type="text" id="convInputPath" class="folder-input" style="height:34px;" placeholder="Đường dẫn file video/audio nguồn..." />
+
+          <div style="display:grid;grid-template-columns:1.4fr 1fr auto;gap:10px;margin-top:12px;align-items:end;">
+            <div>
+              <div style="font-size:12px;font-weight:700;margin-bottom:5px;">2. Định dạng đầu ra (Target Format):</div>
+              <select id="convTargetFormat" class="folder-input" style="height:36px;">
+                <option value="mp4">MP4 — Chuẩn H.264 (avc1) + AAC (Tương thích 100% thiết bị & sửa lỗi Bilibili)</option>
+                <option value="mov">MOV — Apple QuickTime (Dựng phim macOS / Final Cut)</option>
+                <option value="mkv">MKV — Matroska Video (Lưu trữ đa luồng chất lượng cao)</option>
+                <option value="webm">WEBM — Google VP9 + Opus (Tối ưu cho Web)</option>
+                <option value="avi">AVI — MPEG-4 + MP3 (Tương thích thiết bị cũ)</option>
+                <option value="flv">FLV — Flash Video H.264</option>
+                <option value="mp3">MP3 — Chỉ tách âm thanh / nhạc nền (320kbps Stereo)</option>
+                <option value="wav">WAV — Tách âm thanh gốc Lossless (PCM 16-bit)</option>
+                <option value="gif">GIF — Ảnh động chất lượng cao (12fps)</option>
+              </select>
+            </div>
+            <div>
+              <div style="font-size:12px;font-weight:700;margin-bottom:5px;">3. Mức chất lượng (Quality):</div>
+              <select id="convQuality" class="folder-input" style="height:36px;">
+                <option value="high">Chất lượng Cao nhất (High / CRF 20)</option>
+                <option value="medium">Cân bằng dung lượng (Medium / CRF 24)</option>
+                <option value="compact">Nén nhẹ dung lượng (Compact / CRF 28)</option>
+              </select>
+            </div>
+            <button class="btn-primary" style="height:36px;padding:0 18px;" onclick="startConversion()">
+              🔄 Bắt đầu Chuyển đổi
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <div style="font-size:12.5px;font-weight:700;margin-bottom:8px;">Tiến trình & Lịch sử Chuyển đổi Định dạng:</div>
+          <div class="downloads-list" id="conversionsList">
+            <div class="empty-hint">Chưa có tác vụ chuyển đổi nào.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal 2: Cài đặt Thư mục Lưu trữ cho Gốc & Từng Nền tảng -->
+  <div class="modal-backdrop" id="storageModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div>
+          <div style="font-size:15px;font-weight:700;">⚙️ Quản lý Thư mục Lưu trữ theo Nền tảng</div>
+          <div style="font-size:12px;color:#64748b;">Mỗi nền tảng có 1 thư mục riêng biệt. Bạn có thể đổi thư mục gốc hoặc tùy chỉnh đường dẫn cho từng nền tảng.</div>
+        </div>
+        <button class="btn-sm" onclick="closeStorageModal()">✕ Đóng</button>
+      </div>
+      <div class="modal-body">
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:12px 14px;">
+          <div style="font-size:12.5px;font-weight:700;margin-bottom:6px;">📁 Thư mục gốc mặc định (Root Directory):</div>
+          <div style="display:flex;gap:8px;">
+            <input type="text" id="rootDirInput" class="folder-input" />
+            <button class="btn-sm" onclick="browseRootFolder()">📁 Chọn thư mục...</button>
+            <button class="btn-sm" style="background:#2563eb;color:#fff;border-color:#2563eb;" onclick="saveRootFolder()">💾 Lưu Thư mục Gốc</button>
+          </div>
+          <div style="font-size:11px;color:#64748b;margin-top:5px;">
+            Mặc định các nền tảng chưa tùy chỉnh riêng sẽ tự động tạo thư mục con bên trong Thư mục gốc này (ví dụ: <code>.../Douyin</code>, <code>.../Kuaishou</code>).
+          </div>
+        </div>
+
+        <table class="storage-table">
+          <thead>
+            <tr>
+              <th style="width:185px;">Nền tảng</th>
+              <th>Đường dẫn lưu video hiện tại</th>
+              <th style="width:235px;text-align:right;">Thao tác</th>
+            </tr>
+          </thead>
+          <tbody id="platformStorageRows"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal 3: Tải & Cài đặt Công cụ / Mô hình AI còn thiếu -->
+  <div class="modal-backdrop" id="toolInstallerModal">
+    <div class="modal-card" style="max-width:920px;">
+      <div class="modal-header">
+        <div>
+          <div style="font-size:16px;font-weight:700;">📦 Tải & Cài đặt Công cụ / Mô hình AI Còn thiếu</div>
+          <div style="font-size:12px;color:#64748b;">Tải từ nguồn chính thức • Kiểm tra tính toàn vẹn SHA-256 • Kiểm tra phiên bản thực tế • Giữ nguyên các chức năng độc lập khác</div>
+        </div>
+        <button class="btn-sm" onclick="closeToolInstallerModal()">✕ Đóng</button>
+      </div>
+      <div class="modal-body">
+        <div style="font-size:12px;color:#475569;background:#f8fafc;padding:10px 14px;border-radius:8px;border:1px solid #e2e8f0;">
+          💡 <strong>Cam kết minh bạch:</strong> Ứng dụng không bao giờ tải hoặc thực thi binary âm thầm. Bạn luôn được biết rõ tên công cụ, nguồn tải chính thức, dung lượng và yêu cầu phần cứng trước khi bấm cài đặt.
+        </div>
+        <div id="installerToolsList" style="display:flex;flex-direction:column;gap:12px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-wrap" id="toastWrap"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

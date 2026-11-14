@@ -1,0 +1,52 @@
+# ============================================================================
+# Chỉ đưa MÃ NGUỒN lên GitHub/Drive. Mọi thứ dưới đây được tạo lại tự động bằng:
+#   npm install --omit=dev   (thư viện Node + ffmpeg đúng hệ điều hành qua ffmpeg-static)
+#   node scripts/setup.js    (Python AI, yt-dlp, model AI — tải từ nguồn chính thức)
+# ============================================================================
+
+# --- Bí mật & dữ liệu riêng của từng máy (KHÔNG BAO GIỜ commit) ---
+config/ai_secrets.json
+config/ai_usage.json
+config/ai_logs.jsonl*
+config/ai_cache/
+config/ai_settings.json
+config/dub_jobs_state.json
+config/storage_settings.json
+config/.version_cache.json
+config/*.tmp
+.env
+
+# --- Môi trường & thư viện (phụ thuộc hệ điều hành, tái tạo được) ---
+node_modules/
+.venv/
+.venv-vieneu/
+.venv-llm/
+bin/tools/
+
+# --- Công cụ nhị phân tải về theo hệ điều hành ---
+bin/ffmpeg
+bin/ffmpeg.exe
+bin/ffprobe
+bin/ffprobe.exe
+bin/yt-dlp
+bin/yt-dlp.exe
+
+# --- Model AI (lớn, tải lại được; có thể copy cả thư mục bin/models qua Drive để khỏi tải lại) ---
+bin/models/
+
+# --- Video tải về / xuất ra của người dùng ---
+downloads/
+Dubbed/
+
+# --- Rác hệ điều hành / công cụ ---
+.DS_Store
+Thumbs.db
+desktop.ini
+.claude/
+*.log
+
+# Gói đóng gói để chia sẻ (tạo bằng npm run pack)
+dist/
+
+# Nhật ký làm việc nội bộ (chứa đường dẫn máy cá nhân) — chỉ giữ trên máy
+HANDOFF_ANTIGRAVITY.md

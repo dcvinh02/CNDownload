@@ -1,0 +1,2 @@
+# AI dịch Local (.venv-llm) — Apple MLX, CHỈ hỗ trợ Mac chip Apple (M1 trở lên).
+mlx-lm==0.32.2

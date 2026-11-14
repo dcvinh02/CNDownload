@@ -1,0 +1,11 @@
+# Môi trường AI lõi (.venv) — nhận dạng giọng nói, phân tách người nói, tách giọng/nhạc nền,
+# giọng đọc Piper, dịch Offline Argos, giọng Edge (Cloud, tùy chọn).
+# Đã kiểm tra giải phụ thuộc cho: macOS arm64 & Windows x64, Python 3.12 (chỉ dùng wheel có sẵn).
+faster-whisper==1.2.1
+ctranslate2==4.9.0
+sherpa-onnx==1.12.40
+numpy==2.2.6
+sentencepiece==0.2.2
+av==15.1.0  # faster-whisper 1.2.1 dùng tham số metadata_errors đã bị bỏ ở PyAV >= 16
+edge-tts==7.3.1
+huggingface_hub>=0.30,<2

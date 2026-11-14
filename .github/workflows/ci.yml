@@ -1,0 +1,43 @@
+# Kiểm thử thật trên Windows và macOS mỗi khi đẩy code lên GitHub:
+# cài từ đầu như máy người dùng mới (npm + scripts/setup.js) rồi chạy toàn bộ bộ test.
+name: CI Windows + macOS
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Cài thư viện Node (kèm ffmpeg đúng hệ điều hành)
+        run: npm ci --omit=dev --no-audit --no-fund
+
+      - name: Bộ nhớ đệm model AI & Python (tăng tốc lần chạy sau)
+        uses: actions/cache@v4
+        with:
+          path: |
+            bin/models
+            bin/tools/python
+          key: ai-${{ runner.os }}-${{ hashFiles('requirements/*.txt', 'src/tool_installer.js', 'src/python_env.js') }}
+
+      - name: Cài thành phần AI (Python 3.12, model) như máy mới
+        run: node scripts/setup.js --yes
+
+      - name: Kiểm tra cài đặt
+        run: node scripts/setup.js --check
+
+      - name: Chạy toàn bộ test
+        run: npm test

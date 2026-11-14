@@ -1,0 +1,5 @@
+#!/bin/zsh
+APP_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+cd "$APP_ROOT"
+pkill -f "src/server.js" 2>/dev/null || true
+exec "$APP_ROOT/bin/CNVideoScraperApp" "$APP_ROOT"
