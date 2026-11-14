@@ -155,14 +155,17 @@ function stop() {
   if (proc) {
     const p = proc;
     try {
+      // Đóng stdin → wrapper tự tắt máy chủ con đúng cách.
       p.stdin.end();
-      p.kill('SIGTERM');
+      // POSIX: SIGTERM được wrapper bắt để tắt máy chủ con. Windows: kill() = TerminateProcess ngay lập tức
+      // (wrapper không kịp dọn) → chỉ dùng làm dự phòng sau 5 s; Job Object trong wrapper vẫn diệt máy chủ con.
+      if (!IS_WIN) p.kill('SIGTERM');
     } catch (_) {}
     const t = setTimeout(() => {
       try {
-        p.kill('SIGKILL');
+        if (p.exitCode === null) p.kill(IS_WIN ? undefined : 'SIGKILL');
       } catch (_) {}
-    }, 4000);
+    }, IS_WIN ? 5000 : 4000);
     if (t.unref) t.unref();
   }
   proc = null;
@@ -287,5 +290,6 @@ module.exports = {
   isModelInstalled,
   listInstalledModels,
   ensureRunning,
-  stop
+  stop,
+  _internals: { getProcess: () => proc }
 };

@@ -680,7 +680,10 @@ async function main() {
     const dubOn = onsetsOf(syncJob.outputPath, -38);
     assert(dubOn.length >= 3, `onsets=${JSON.stringify(dubOn)}`);
     const diffs = truthOnsets.map((t) => Math.min(...dubOn.map((o) => Math.abs(o - t))));
-    assert(diffs.every((d) => d <= 0.15), `lệch ${diffs.map((d) => d.toFixed(3)).join(', ')} s`);
+    assert(
+      diffs.every((d) => d <= 0.15),
+      `lệch ${diffs.map((d) => d.toFixed(3)).join(', ')} s; gốc=${truthOnsets.join('/')} lồng=${dubOn.join('/')} ASR=${segs.map((x) => x.startSec).join('/')} [${fixtureVoice}]`
+    );
     return `[${fixtureVoice}] onset lồng tiếng ${dubOn.slice(0, 3).join(' / ')} s vs gốc ${truthOnsets.join(' / ')} s (lệch tối đa ${(Math.max(...diffs) * 1000).toFixed(0)} ms)`;
   });
   await check('Tách giọng gốc: chế độ "chỉ giữ nhạc nền" loại lời nói gốc khỏi file xuất (đo dải tần lời nói)', async () => {
@@ -699,6 +702,40 @@ async function main() {
     return `lời nói gốc: ${a.toFixed(1)} dB → ${b.toFixed(1)} dB (giảm ${(a - b).toFixed(1)} dB)`;
   });
   vieneu.stop();
+
+  /* ---------------- 4b2. AI Local Qwen: không để máy chủ mồ côi (Windows) ---------------- */
+  await check('AI Local Qwen trên Windows: tắt bình thường và khi wrapper bị diệt đột ngột đều KHÔNG để llama-server mồ côi', async () => {
+    if (process.platform !== 'win32') throw skip('Chỉ áp dụng Windows (macOS dùng tín hiệu POSIX, đã kiểm ở đợt 2).');
+    const localLlm = require('../src/local_llm_service');
+    const inst = localLlm.listInstalledModels();
+    if (!localLlm.isRuntimeInstalled() || inst.length === 0) throw skip('Chưa cài AI Local Qwen.', true);
+    const count = () => (spawnSync('tasklist', ['/FI', 'IMAGENAME eq llama-server.exe', '/FO', 'CSV', '/NH'], { encoding: 'utf8' }).stdout || '').split('\n').filter((l) => /llama-server/i.test(l)).length;
+    const waitZero = async (ms) => {
+      const t0 = Date.now();
+      while (Date.now() - t0 < ms) {
+        if (count() === 0) return true;
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      return count() === 0;
+    };
+    localLlm.stop();
+    assert(await waitZero(15000), `trước khi kiểm thử đã có ${count()} llama-server`);
+    await localLlm.ensureRunning(inst[0].id);
+    assert(count() >= 1, 'máy chủ chưa chạy');
+    localLlm.stop();
+    const t1 = Date.now();
+    assert(await waitZero(12000), `tắt bình thường: còn ${count()} llama-server`);
+    const graceful = ((Date.now() - t1) / 1000).toFixed(1);
+    await localLlm.ensureRunning(inst[0].id);
+    const wrapper = localLlm._internals.getProcess();
+    assert(wrapper && wrapper.pid && count() >= 1, 'máy chủ chưa chạy lần 2');
+    process.kill(wrapper.pid); // Windows: TerminateProcess wrapper — mô phỏng đóng cửa sổ / crash
+    const t2 = Date.now();
+    assert(await waitZero(10000), `wrapper bị diệt: còn ${count()} llama-server mồ côi (Job Object không hoạt động)`);
+    const hard = ((Date.now() - t2) / 1000).toFixed(1);
+    localLlm.stop();
+    return `tắt bình thường: dọn sau ${graceful} s; wrapper bị diệt đột ngột: máy chủ con tự tắt sau ${hard} s`;
+  });
 
   /* ---------------- 4c. Giao diện: danh sách tải không bị treo khi tác vụ hoàn tất ---------------- */
   console.log('\n--- [4c] Giao diện (chạy public/app.js thật trong DOM giả lập) ---');

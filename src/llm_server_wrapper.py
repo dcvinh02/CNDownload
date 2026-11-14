@@ -17,6 +17,67 @@ import sys
 import threading
 
 
+_JOB = None  # giữ handle Job Object suốt đời wrapper
+
+
+def _kill_child_with_wrapper(proc):
+    """
+    Windows: gắn máy chủ con vào một Job Object có cờ KILL_ON_JOB_CLOSE. Khi wrapper kết thúc theo BẤT KỲ cách nào
+    (bị TerminateProcess, đóng cửa sổ console, crash), hệ điều hành đóng handle và tự diệt máy chủ con —
+    không còn llama-server mồ côi giữ ~6 GB RAM. (POSIX dùng tín hiệu + EOF stdin như cũ.)
+    """
+    global _JOB
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateJobObjectW.restype = wintypes.HANDLE
+        k32.CreateJobObjectW.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
+        k32.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD]
+        k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+
+        class IO_COUNTERS(ctypes.Structure):
+            _fields_ = [(n, ctypes.c_ulonglong) for n in ("r", "w", "o", "rb", "wb", "ob")]
+
+        class BASIC(ctypes.Structure):
+            _fields_ = [
+                ("PerProcessUserTimeLimit", ctypes.c_int64),
+                ("PerJobUserTimeLimit", ctypes.c_int64),
+                ("LimitFlags", wintypes.DWORD),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", wintypes.DWORD),
+                ("Affinity", ctypes.c_size_t),
+                ("PriorityClass", wintypes.DWORD),
+                ("SchedulingClass", wintypes.DWORD),
+            ]
+
+        class EXTENDED(ctypes.Structure):
+            _fields_ = [
+                ("BasicLimitInformation", BASIC),
+                ("IoInfo", IO_COUNTERS),
+                ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t),
+            ]
+
+        job = k32.CreateJobObjectW(None, None)
+        info = EXTENDED()
+        info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        ok1 = k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info))  # JobObjectExtendedLimitInformation
+        ok2 = k32.AssignProcessToJobObject(job, wintypes.HANDLE(int(proc._handle)))
+        if ok1 and ok2:
+            _JOB = job
+        else:
+            sys.stderr.write(f"[wrapper] Không gắn được Job Object (lỗi {ctypes.get_last_error()})\n")
+    except Exception as exc:  # noqa: BLE001
+        sys.stderr.write(f"[wrapper] Job Object lỗi: {exc}\n")
+
+
 def main():
     argv = sys.argv[1:]
     if argv[:1] == ["--exec"] and len(argv) >= 2:
@@ -26,6 +87,7 @@ def main():
     # Windows: không mở cửa sổ console riêng cho máy chủ
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
     child = subprocess.Popen(cmd, creationflags=flags)
+    _kill_child_with_wrapper(child)
 
     def shutdown(*_):
         if child.poll() is None:
