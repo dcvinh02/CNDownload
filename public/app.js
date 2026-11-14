@@ -1733,19 +1733,28 @@ async function extractScriptFromSelectedVideo() {
   }
 }
 
+/** 75.4 → "1:15" (đồng hồ phút:giây, dùng chung cho mọi bộ đếm để không lẫn đơn vị) */
+function fmtClock(sec) {
+  const t = Math.max(0, Math.round(Number(sec) || 0));
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  const s = String(t % 60).padStart(2, '0');
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
+}
+
 function renderExtractMonitor(task) {
   const box = document.getElementById('dubExtractMonitor');
   if (!box || !task) return;
   box.style.display = 'block';
   const icon = { pending: '⏳', running: '🔄', completed: '✅', error: '❌', skipped: '➖' };
   document.getElementById('dubExtractTitle').textContent = `📝 Phân đoạn & Dịch — ${task.inputFileName || ''}`;
-  document.getElementById('dubExtractElapsed').textContent = `${task.elapsedSec || 0}s`;
+  document.getElementById('dubExtractElapsed').textContent = `⏱ Đã chạy ${fmtClock(task.elapsedSec)}`;
   document.getElementById('dubExtractProgressFill').style.width = `${task.progress || 0}%`;
   document.getElementById('dubExtractMessage').textContent = task.message || '';
   document.getElementById('dubExtractCancelBtn').style.display = task.status === 'running' ? 'inline-flex' : 'none';
   document.getElementById('dubExtractStages').innerHTML = (task.stages || [])
     .map((st) => {
-      const cnt = st.total > 0 ? ` • ${st.code === 'asr' ? `${Math.round(st.done)}/${Math.round(st.total)} giây` : `${st.done}/${st.total}`}` : '';
+      const cnt = st.total > 0 ? ` • ${st.code === 'asr' ? `đã nghe ${fmtClock(st.done)} / ${fmtClock(st.total)}` : `${st.done}/${st.total}`}` : '';
       return `<div class="extract-stage ${st.state}">${icon[st.state] || '•'} ${escapeHtml(st.label)}${cnt}</div>`;
     })
     .join('');

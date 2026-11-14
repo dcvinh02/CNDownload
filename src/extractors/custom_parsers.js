@@ -93,11 +93,24 @@ async function fallbackHttpSsrSniffer(targetUrl, userAgent = DESKTOP_UA, timeout
   };
 }
 
+/**
+ * Windows / máy không có WebKitSniffer: dùng Edge/Chrome chạy ẩn (chromium_sniffer.js) — cùng định dạng kết quả.
+ * Không có trình duyệt Chromium hoặc trình duyệt lỗi → trích xuất SSR qua HTTP như trước.
+ */
+async function runChromiumOrSsr(targetUrl, userAgent, timeoutMs, snifferOptions) {
+  const chromium = require('./chromium_sniffer');
+  if (chromium.isAvailable()) {
+    const r = await chromium.runChromiumSniffer(targetUrl, userAgent, timeoutMs, snifferOptions || {});
+    if ((r.events && r.events.length) || r.finalInfo) return r;
+  }
+  return fallbackHttpSsrSniffer(targetUrl, userAgent, Math.min(timeoutMs, 6000), snifferOptions);
+}
+
 function runWebKitSniffer(targetUrl, userAgent = DESKTOP_UA, timeoutMs = 8000, snifferOptions = {}) {
   return new Promise((resolve) => {
     const snifferBin = path.join(__dirname, '..', '..', 'bin', 'WebKitSniffer');
-    if (process.platform !== 'darwin' || !fs.existsSync(snifferBin)) {
-      fallbackHttpSsrSniffer(targetUrl, userAgent, Math.min(timeoutMs, 6000), snifferOptions).then(resolve);
+    if (process.platform !== 'darwin' || !fs.existsSync(snifferBin) || process.env.CN_FORCE_CHROMIUM_SNIFFER === '1') {
+      runChromiumOrSsr(targetUrl, userAgent, timeoutMs, snifferOptions).then(resolve);
       return;
     }
 

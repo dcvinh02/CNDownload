@@ -912,6 +912,58 @@ async function installLocalLlm(job) {
   }
 }
 
+const psQuote = (p) => `'${String(p).replace(/'/g, "''")}'`;
+
+/** Tải bộ cài VC++ Redistributable chính thức (aka.ms của Microsoft) và xác minh chữ ký số Microsoft. */
+async function downloadVerifiedVcRedist(onStep = () => {}) {
+  const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
+  const url = `https://aka.ms/vs/17/release/vc_redist.${arch}.exe`;
+  const file = path.join(PROJECT_ROOT, 'bin', 'tools', `vc_redist.${arch}.exe`);
+  await downloadFileWithProgress(url, file, (done, total) => {
+    onStep(`Đang tải Microsoft Visual C++ Redistributable (${(done / 1048576).toFixed(0)}/${((total || 26e6) / 1048576).toFixed(0)} MB)...`);
+  });
+  const check =
+    `$s = Get-AuthenticodeSignature -LiteralPath ${psQuote(file)}; ` +
+    "if ($s.Status -ne 'Valid' -or $s.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') { Write-Output ('INVALID ' + $s.Status + ' ' + $s.SignerCertificate.Subject); exit 3 }; Write-Output 'VALID'";
+  try {
+    await runShellCommand('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', check], 60000);
+  } catch (err) {
+    fs.rmSync(file, { force: true });
+    throw new Error(`Bộ cài VC++ tải về không có chữ ký hợp lệ của Microsoft — đã xóa, không chạy. ${err.message.slice(0, 200)}`);
+  }
+  return file;
+}
+
+/**
+ * llama.cpp bản Windows cần MSVCP140/VCRUNTIME140(_1).dll. Máy chưa có → tải bản chính thức của Microsoft,
+ * kiểm chữ ký số rồi cài (Windows hỏi quyền quản trị 1 lần — người dùng đã bấm cài).
+ */
+async function ensureVcRedist(job) {
+  if (process.platform !== 'win32' || localLlm.missingVcRuntime().length === 0) return;
+  job.step = `Máy thiếu Microsoft Visual C++ Redistributable (${localLlm.missingVcRuntime().join(', ')}) — đang tải bản chính thức...`;
+  const file = await downloadVerifiedVcRedist((m) => {
+    job.step = m;
+  });
+  job.step = 'Đang cài Microsoft Visual C++ Redistributable — hãy bấm "Yes/Có" khi Windows hỏi quyền...';
+  const install =
+    `$p = Start-Process -FilePath ${psQuote(file)} -ArgumentList '/install','/quiet','/norestart' -Verb RunAs -Wait -PassThru; exit $p.ExitCode`;
+  try {
+    await runShellCommand('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', install], 15 * 60 * 1000);
+  } catch (err) {
+    // 3010 = cần khởi động lại, 1638 = đã có bản mới hơn — đều coi là thành công nếu DLL đã có
+    if (localLlm.missingVcRuntime().length) {
+      throw new Error(
+        `Chưa cài được Microsoft Visual C++ Redistributable (có thể đã bấm "No" khi Windows hỏi quyền). Hãy cài thủ công: https://aka.ms/vs/17/release/vc_redist.${process.arch === 'arm64' ? 'arm64' : 'x64'}.exe rồi bấm cài lại. ${err.message.slice(0, 160)}`
+      );
+    }
+  } finally {
+    fs.rmSync(file, { force: true });
+  }
+  if (localLlm.missingVcRuntime().length) {
+    throw new Error(`Đã chạy bộ cài VC++ nhưng vẫn thiếu: ${localLlm.missingVcRuntime().join(', ')}. Khởi động lại máy rồi thử lại.`);
+  }
+}
+
 /**
  * Windows: llama.cpp (bản chính thức đã ghim, kiểm SHA-256) + model GGUF Qwen3.5-9B Q4_K_M (kiểm SHA-256).
  * Không cần quyền Administrator, không cài gì vào hệ thống — tất cả nằm trong bin/.
@@ -924,6 +976,8 @@ async function installLlamaCppLlm(job) {
   await pyEnv.ensureCoreVenv((msg) => {
     job.step = msg;
   });
+
+  await ensureVcRedist(job);
 
   if (!fs.existsSync(lc.serverBin)) {
     const zip = path.join(PROJECT_ROOT, 'bin', 'tools', `${lc.asset.name}.part`);
@@ -1046,6 +1100,7 @@ function getToolInstallJob(jobId) {
 }
 
 module.exports = {
+  _internals: { downloadVerifiedVcRedist },
   resolveOfficialToolSource,
   getInstallableToolsCatalog,
   verifyInstalledToolOrModel,

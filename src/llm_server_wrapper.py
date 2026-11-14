@@ -78,6 +78,30 @@ def _kill_child_with_wrapper(proc):
         sys.stderr.write(f"[wrapper] Job Object lỗi: {exc}\n")
 
 
+_NTSTATUS = {
+    0xC0000135: "thiếu DLL (thường là Microsoft Visual C++ Redistributable 2015–2022)",
+    0xC0000005: "truy cập bộ nhớ không hợp lệ (thường do driver GPU/Vulkan)",
+    0xC000001D: "CPU không hỗ trợ tập lệnh của bản dựng",
+    0xC0000409: "tiến trình tự hủy (abort) — xem các dòng log phía trên",
+    0xC0000017: "không đủ bộ nhớ",
+    0xC000012D: "không đủ bộ nhớ ảo (RAM + pagefile)",
+}
+
+
+def _describe_exit(code):
+    if os.name != "nt":
+        return f"tín hiệu {-code}" if code < 0 else str(code)
+    u = code & 0xFFFFFFFF
+    if u >= 0xC0000000:
+        return f"0x{u:08X} — {_NTSTATUS.get(u, 'lỗi hệ thống Windows')}"
+    return str(code)
+
+
+def _exit(code):
+    # os._exit chỉ nhận số nguyên có dấu 32-bit: mã NTSTATUS (vd. 0xC0000135) phải đổi về mã ngắn.
+    os._exit(code if 0 <= code <= 255 else 1)
+
+
 def main():
     argv = sys.argv[1:]
     if argv[:1] == ["--exec"] and len(argv) >= 2:
@@ -111,8 +135,18 @@ def main():
 
     threading.Thread(target=watch_parent, daemon=True).start()
     code = child.wait()
-    os._exit(code)
+    if code != 0:
+        sys.stderr.write(f"[wrapper] Máy chủ LLM dừng với mã {_describe_exit(code)}\n")
+        sys.stderr.flush()
+    _exit(code)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except BaseException as exc:  # noqa: BLE001 — luôn thoát bằng os._exit để luồng đọc stdin không làm Python sập khi thoát
+        import traceback
+
+        sys.stderr.write("[wrapper] Lỗi: " + "".join(traceback.format_exception_only(type(exc), exc)))
+        sys.stderr.flush()
+        os._exit(1)

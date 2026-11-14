@@ -23,6 +23,8 @@ const CORE_PYTHON = path.join(PROJECT_ROOT, '.venv', IS_WIN ? 'Scripts' : 'bin',
 const MODELS_DIR = path.join(PROJECT_ROOT, 'bin', 'models', 'llm');
 const IDLE_MS = 8 * 60 * 1000;
 const WRAPPER = path.join(__dirname, 'llm_server_wrapper.py');
+// Log máy chủ AI Local (không chứa API Key/văn bản dịch) để chẩn đoán lỗi khởi động
+const SERVER_LOG = path.join(PROJECT_ROOT, 'config', 'llm_server.log');
 
 /** Bộ chạy theo máy: 'mlx' (Mac chip Apple), 'llamacpp' (Windows), null (chưa hỗ trợ). */
 const BACKEND =
@@ -80,9 +82,22 @@ let startPromise = null;
 let idleTimer = null;
 let lastStderr = '';
 
+/** DLL Visual C++ 2015–2022 mà llama.cpp bản Windows cần (không có sẵn trong gói llama.cpp). */
+const VC_RUNTIME_DLLS = ['msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll'];
+
+/** Windows: trả về danh sách DLL VC++ còn thiếu (tìm trong System32 và thư mục llama.cpp). */
+function missingVcRuntime() {
+  if (!IS_WIN) return [];
+  const sys32 = path.join(process.env.SystemRoot || process.env.windir || 'C:\\Windows', 'System32');
+  return VC_RUNTIME_DLLS.filter((d) => !fs.existsSync(path.join(sys32, d)) && !fs.existsSync(path.join(LLAMA_CPP.dir, d)));
+}
+
+// Đã gặp crash do driver GPU/Vulkan → chạy CPU cho các lần sau trong phiên này
+let llamaCpuOnly = false;
+
 function isRuntimeInstalled() {
   if (BACKEND === 'mlx') return fs.existsSync(PYTHON_BIN) && fs.existsSync(path.join(VENV_DIR, 'lib'));
-  if (BACKEND === 'llamacpp') return fs.existsSync(LLAMA_CPP.serverBin) && fs.existsSync(CORE_PYTHON);
+  if (BACKEND === 'llamacpp') return fs.existsSync(LLAMA_CPP.serverBin) && fs.existsSync(CORE_PYTHON) && missingVcRuntime().length === 0;
   return false;
 }
 
@@ -179,11 +194,21 @@ function touch() {
   if (idleTimer.unref) idleTimer.unref();
 }
 
+/** Các dòng log có ích nhất khi máy chủ lỗi: ưu tiên dòng [wrapper]/error, bỏ dòng sập Python khi thoát. */
+function usefulStderr() {
+  const lines = lastStderr
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l && !/Python runtime state|Current thread|<no Python frame>|Fatal Python error|_enter_buffered_busy/.test(l));
+  const key = lines.filter((l) => /\[wrapper\]|error|failed|lỗi|vulkan|out of memory|cannot|unable/i.test(l));
+  return (key.length ? key.slice(-3) : lines.slice(-3)).join(' | ') || 'không có log';
+}
+
 async function waitReady(baseUrl, child, timeoutMs) {
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutMs) {
     if (child.exitCode !== null) {
-      throw new Error(`Máy chủ LLM local dừng khi khởi động: ${lastStderr.split('\n').filter(Boolean).slice(-3).join(' | ')}`);
+      throw new Error(`Máy chủ LLM local dừng khi khởi động: ${usefulStderr()}`);
     }
     try {
       const r = await fetch(`${baseUrl}/models`, { signal: AbortSignal.timeout(1500) });
@@ -207,6 +232,7 @@ function buildServerCommand(model, port) {
       '--cors-origins', 'localhost',
       '--no-webui'
     ];
+    if (llamaCpuOnly) args.push('--device', 'none');
     if (model.thinking) args.push('--chat-template-kwargs', JSON.stringify({ enable_thinking: false }));
     return { bin: CORE_PYTHON, args, env: { ...process.env, PYTHONUTF8: '1' } };
   }
@@ -233,6 +259,12 @@ async function ensureRunning(modelId) {
   if (!isRuntimeInstalled()) {
     throw new Error('Chưa cài bộ chạy AI Local. Mở trình cài công cụ → "AI dịch Local (Qwen3.5 9B)".');
   }
+  const missingDll = missingVcRuntime();
+  if (missingDll.length) {
+    throw new Error(
+      `Máy thiếu Microsoft Visual C++ Redistributable (${missingDll.join(', ')}) mà AI Local cần. Mở "Công cụ" → bấm cài lại "AI dịch Local Qwen3.5 9B" (tự cài bản chính thức của Microsoft), hoặc tải tại https://aka.ms/vs/17/release/vc_redist.x64.exe`
+    );
+  }
   const model = LOCAL_LLM_MODELS.find((m) => m.id === modelId) || listInstalledModels()[0];
   if (!model || !isModelInstalled(model.id)) {
     throw new Error(`Chưa tải model ${modelId || 'Qwen'} cho AI Local. Mở trình cài công cụ để tải.`);
@@ -243,6 +275,11 @@ async function ensureRunning(modelId) {
   }
   if (startPromise && current && current.modelId === model.id) return startPromise;
   stop();
+  try {
+    fs.mkdirSync(path.dirname(SERVER_LOG), { recursive: true });
+    if (fs.existsSync(SERVER_LOG) && fs.statSync(SERVER_LOG).size > 2 * 1024 * 1024) fs.rmSync(SERVER_LOG, { force: true });
+    fs.appendFileSync(SERVER_LOG, `\n[${new Date().toISOString()}] Khởi động ${model.id}${llamaCpuOnly ? ' (CPU)' : ''}\n`);
+  } catch (_) {}
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}/v1`;
   const cmd = buildServerCommand(model, port);
@@ -251,6 +288,9 @@ async function ensureRunning(modelId) {
   const child = spawn(cmd.bin, cmd.args, { stdio: ['pipe', 'ignore', 'pipe'], env: cmd.env, windowsHide: true });
   child.stderr.on('data', (d) => {
     lastStderr = (lastStderr + d.toString()).slice(-4000);
+    try {
+      fs.appendFileSync(SERVER_LOG, d);
+    } catch (_) {}
   });
   child.on('close', () => {
     if (proc === child) {
@@ -270,6 +310,14 @@ async function ensureRunning(modelId) {
     return await startPromise;
   } catch (err) {
     stop();
+    // Bản Vulkan crash/không dùng được GPU (driver cũ, GPU không hỗ trợ) → thử lại 1 lần bằng CPU
+    if (BACKEND === 'llamacpp' && !llamaCpuOnly && !/Visual C\+\+|0xC0000135|thiếu DLL/i.test(err.message)) {
+      llamaCpuOnly = true;
+      try {
+        fs.appendFileSync(SERVER_LOG, `[${new Date().toISOString()}] GPU lỗi, chuyển sang CPU: ${err.message}\n`);
+      } catch (_) {}
+      return ensureRunning(model.id);
+    }
     throw err;
   }
 }
@@ -282,6 +330,9 @@ module.exports = {
   ALL_MODELS,
   CORE_PYTHON,
   modelFilePath,
+  missingVcRuntime,
+  VC_RUNTIME_DLLS,
+  SERVER_LOG,
   MODELS_DIR,
   PYTHON_BIN,
   VENV_DIR,

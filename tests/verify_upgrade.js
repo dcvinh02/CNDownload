@@ -33,6 +33,7 @@ const { translateSegmentsWithLLM, _internals: llmInternals } = require('../src/a
 const dub = require('../src/dubbing_engine');
 const vieneu = require('../src/vieneu_service');
 
+const DESKTOP_UA_TEST = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 const results = [];
 function record(status, name, note = '') {
   results.push({ status, name, note });
@@ -735,6 +736,64 @@ async function main() {
     const hard = ((Date.now() - t2) / 1000).toFixed(1);
     localLlm.stop();
     return `tắt bình thường: dọn sau ${graceful} s; wrapper bị diệt đột ngột: máy chủ con tự tắt sau ${hard} s`;
+  });
+
+  await check('Windows: tải bộ cài Microsoft Visual C++ Redistributable chính thức và xác minh chữ ký số Microsoft (không cài)', async () => {
+    if (process.platform !== 'win32') throw skip('Chỉ áp dụng Windows.');
+    const localLlm = require('../src/local_llm_service');
+    const file = await require('../src/tool_installer')._internals.downloadVerifiedVcRedist();
+    const size = fs.statSync(file).size;
+    fs.rmSync(file, { force: true });
+    assert(size > 10 * 1024 * 1024, `kích thước ${size}`);
+    return `chữ ký Microsoft hợp lệ, ${(size / 1048576).toFixed(1)} MB; DLL VC++ trên máy CI: ${localLlm.missingVcRuntime().length ? 'thiếu ' + localLlm.missingVcRuntime().join(',') : 'đủ'}`;
+  });
+
+  /* ---------------- 4b3. Chromium Sniffer (Douyin/Kuaishou trên Windows) ---------------- */
+  await check('Chromium Sniffer (Edge/Chrome ẩn): bắt phản hồi có dữ liệu video + thẻ <video> trên trang thử cục bộ', async () => {
+    const chromium = require('../src/extractors/chromium_sniffer');
+    if (!chromium.isAvailable()) throw skip('Máy không có Edge/Chrome.');
+    const http = require('http');
+    const srv = http.createServer((rq, rs) => {
+      if (rq.url.startsWith('/aweme/v1/web/aweme/detail')) {
+        rs.setHeader('Content-Type', 'application/json');
+        return rs.end(JSON.stringify({ aweme_detail: { desc: 'thử', video: { play_addr: { url_list: ['https://example.com/v.mp4'] } } } }));
+      }
+      if (rq.url.startsWith('/v.mp4')) {
+        rs.statusCode = 404;
+        return rs.end();
+      }
+      rs.setHeader('Content-Type', 'text/html; charset=utf-8');
+      rs.end('<!doctype html><title>Trang thử</title><video src="/v.mp4?mime_type=video_mp4" muted></video><script>fetch("/aweme/v1/web/aweme/detail/?aweme_id=1").then(r=>r.text())</script>');
+    });
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    try {
+      const url = `http://127.0.0.1:${srv.address().port}/`;
+      const r = await chromium.runChromiumSniffer(url, DESKTOP_UA_TEST, 8000, {});
+      const types = r.events.map((e) => e.type);
+      assert(types.includes('fetch') && r.events.some((e) => (e.data.body || '').includes('aweme_detail')), `không bắt được fetch: ${JSON.stringify(types)} ${r.error || ''}`);
+      assert(types.includes('video_dom'), `không bắt được <video>: ${JSON.stringify(types)}`);
+      assert(r.finalInfo && r.finalInfo.title === 'Trang thử' && r.finalInfo.hasCaptcha === false, `finalInfo=${JSON.stringify(r.finalInfo).slice(0, 200)}`);
+      return `${path.basename(chromium.findChromiumBrowser())}: ${types.join(', ')}`;
+    } finally {
+      srv.close();
+    }
+  });
+  await check('Douyin thật qua Chromium Sniffer (đường dùng trên Windows): có aweme_detail và link phát', async () => {
+    const chromium = require('../src/extractors/chromium_sniffer');
+    if (!chromium.isAvailable()) throw skip('Máy không có Edge/Chrome.');
+    const r = await chromium.runChromiumSniffer('https://open.douyin.com/player/video?vid=7702399097798785014&autoplay=1', DESKTOP_UA_TEST, 9000, {});
+    let det = null;
+    for (const e of r.events) {
+      try {
+        const j = JSON.parse((e.data && e.data.body) || '{}');
+        if (j.aweme_detail) det = j.aweme_detail;
+      } catch (_) {}
+    }
+    const urls = (det && det.video && det.video.play_addr && det.video.play_addr.url_list) || [];
+    if (!det || urls.length === 0) {
+      throw skip(`Douyin không trả dữ liệu cho máy này (mạng/khu vực/xác minh): ${r.error || ''} captcha=${r.finalInfo && r.finalInfo.hasCaptcha}`, true);
+    }
+    return `"${String(det.desc || '').slice(0, 30)}" • ${urls.length} link phát`;
   });
 
   /* ---------------- 4c. Giao diện: danh sách tải không bị treo khi tác vụ hoàn tất ---------------- */

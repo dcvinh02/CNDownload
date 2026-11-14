@@ -2711,7 +2711,8 @@ function startExtractTask(params = {}) {
           const frac = t > 0 ? Math.min(1, d / t) : 0;
           if (code === 'asr') {
             task.progress = 8 + Math.round(frac * 50);
-            task.message = `Nhận dạng giọng nói: ${Math.round(d)}/${Math.round(t)} giây âm thanh`;
+            const clk = (x) => `${Math.floor(Math.round(x) / 60)}:${String(Math.round(x) % 60).padStart(2, '0')}`;
+            task.message = `Nhận dạng giọng nói: đã nghe ${clk(d)} / ${clk(t)} của video`;
           } else if (code === 'diarize') {
             task.progress = 58 + Math.round(frac * 10);
             task.message = `Phân tách người nói: ${d}/${t} khối`;
