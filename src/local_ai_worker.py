@@ -812,8 +812,21 @@ def cmd_transcribe_and_translate(args):
             continue
         raw_list.extend(split_segment_by_sentences(s))
 
-    # Nếu vad_filter quá chặt trên clip ngắn, thử lại không có vad_filter
+    # Nếu vad_filter quá chặt trên clip ngắn, thử lại không có vad_filter — NHƯNG chỉ khi VAD (ngưỡng nới lỏng)
+    # vẫn thấy có tiếng nói. Không có bước này, Whisper "bịa" chữ trên nhạc/âm đơn (thấy trên CPU x86 Windows).
+    speech_present = True
     if not raw_list:
+        try:
+            from faster_whisper.audio import decode_audio
+            from faster_whisper.vad import VadOptions, get_speech_timestamps
+
+            _pcm = decode_audio(audio_path, sampling_rate=16000)
+            speech_present = bool(
+                get_speech_timestamps(_pcm, VadOptions(threshold=0.25, min_speech_duration_ms=150, speech_pad_ms=200))
+            )
+        except Exception:
+            speech_present = True  # không kiểm tra được thì giữ hành vi cũ
+    if not raw_list and speech_present:
         segments_gen2, info2 = model.transcribe(
             audio_path,
             beam_size=3,
@@ -824,6 +837,9 @@ def cmd_transcribe_and_translate(args):
         info = info2
         for s in segments_gen2:
             if getattr(s, "no_speech_prob", 0.0) > 0.85:
+                continue
+            # Đoạn độ tin cậy thấp hoặc lặp từ (dấu hiệu ảo giác) bị loại
+            if getattr(s, "avg_logprob", 0.0) < -1.0 or getattr(s, "compression_ratio", 0.0) > 2.4:
                 continue
             raw_list.append({"start": s.start, "end": s.end, "text": (s.text or "").strip()})
 
