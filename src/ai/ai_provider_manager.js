@@ -63,6 +63,19 @@ function writeJsonAtomic(file, data, mode = 0o644) {
   try {
     fs.chmodSync(file, mode);
   } catch (_) {}
+  if (mode === 0o600) restrictToCurrentUserWin(file);
+}
+
+/**
+ * Windows bỏ qua quyền kiểu Unix (chmod 0600 chỉ còn cờ read-only) → dùng ACL: bỏ quyền kế thừa từ thư mục
+ * (vd. nhóm Users đọc được khi dự án nằm ở C:\CNVideo), chỉ cấp cho tài khoản đang chạy ứng dụng.
+ */
+function restrictToCurrentUserWin(file) {
+  if (process.platform !== 'win32' || !process.env.USERNAME) return;
+  const who = process.env.USERDOMAIN ? `${process.env.USERDOMAIN}\\${process.env.USERNAME}` : process.env.USERNAME;
+  try {
+    require('child_process').spawnSync('icacls', [file, '/inheritance:r', '/grant:r', `${who}:F`], { windowsHide: true, stdio: 'ignore', timeout: 15000 });
+  } catch (_) {}
 }
 
 const DEFAULT_SETTINGS = {

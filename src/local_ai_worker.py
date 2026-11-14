@@ -765,6 +765,48 @@ def merge_and_clean_asr_segments(raw_segments, total_duration):
     return merged
 
 
+def refine_segment_starts(audio_path, segments, sr=16000):
+    """
+    Whisper hay đặt mốc từ đầu tiên SỚM hơn lời nói thật (~0,1–0,25 s; cộng thêm speech_pad của VAD),
+    làm lời lồng tiếng vào trước lời gốc. Căn lại theo năng lượng âm thanh thật:
+    - chỉ dời mốc VỀ SAU, tối đa 0,4 s, không vượt quá (endSec - 0,3 s);
+    - chỉ khi phần trước điểm bắt đầu nói là khoảng lặng rõ (thấp hơn mức lời nói >= 20 dB);
+      có nhạc nền/tiếng động lớn thì giữ nguyên mốc ASR.
+    """
+    if not segments:
+        return segments
+    try:
+        import numpy as _np
+        from faster_whisper.audio import decode_audio
+
+        pcm = decode_audio(audio_path, sampling_rate=sr).astype(_np.float32)
+    except Exception:
+        return segments
+    hop = int(sr * 0.01)  # khung 10 ms
+    n = len(pcm) // hop
+    if n <= 0:
+        return segments
+    frames = pcm[: n * hop].reshape(n, hop)
+    db = 10.0 * _np.log10(_np.mean(frames * frames, axis=1) + 1e-12)
+    for seg in segments:
+        st, en = float(seg["startSec"]), float(seg["endSec"])
+        i0 = int(st * 100)
+        i_hi = min(n, int(min(st + 0.4, en - 0.3) * 100))
+        i_ref = min(n, int(min(st + 1.2, en) * 100))
+        if i_hi <= i0 + 1 or i_ref <= i0:
+            continue
+        speech_db = float(_np.percentile(db[i0:i_ref], 90))
+        thr = speech_db - 20.0
+        onset = None
+        for k in range(i0, i_hi):
+            if db[k] >= thr:
+                onset = k
+                break
+        if onset is not None and onset > i0:
+            seg["startSec"] = round(onset / 100.0, 2)
+    return segments
+
+
 def cmd_transcribe_and_translate(args):
     from faster_whisper import WhisperModel
 
@@ -844,6 +886,7 @@ def cmd_transcribe_and_translate(args):
             raw_list.append({"start": s.start, "end": s.end, "text": (s.text or "").strip()})
 
     merged_segments = merge_and_clean_asr_segments(raw_list, getattr(info, "duration", 0.0) or 0.0)
+    merged_segments = refine_segment_starts(audio_path, merged_segments)
     total_chars = sum(len(x["sourceText"]) for x in merged_segments)
     if not merged_segments or total_chars < 1:
         return {

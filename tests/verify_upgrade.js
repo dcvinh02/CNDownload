@@ -319,14 +319,24 @@ async function main() {
       },
       features: { translation: { providerId: 'gemini', model: 'gemini-test', autoFallback: false } }
     });
-    const mode = fs.statSync(ai._internals.SECRETS_FILE).mode & 0o777;
-    assert(mode === 0o600, `quyền file ${mode.toString(8)}`);
+    let mode = fs.statSync(ai._internals.SECRETS_FILE).mode & 0o777;
+    let permNote = '';
+    if (process.platform === 'win32') {
+      // Windows: kiểm tra ACL thật — chỉ tài khoản hiện tại, không kế thừa, không có Users/Everyone
+      const acl = spawnSync('icacls', [ai._internals.SECRETS_FILE], { encoding: 'utf8' }).stdout || '';
+      assert(!/Everyone|BUILTIN\\Users|Authenticated Users|\(I\)/i.test(acl), `ACL còn quyền chung: ${acl.replace(/\s+/g, ' ')}`);
+      assert(acl.toLowerCase().includes(String(process.env.USERNAME).toLowerCase()), `ACL thiếu tài khoản hiện tại: ${acl}`);
+      permNote = 'ACL: chỉ tài khoản hiện tại';
+    } else {
+      assert(mode === 0o600, `quyền file ${mode.toString(8)}`);
+      permNote = `mode=0${mode.toString(8)}`;
+    }
     const pub = JSON.stringify(cfg);
     assert(!pub.includes('TEST-KEY-1234567890'), 'lộ key trong cấu hình công khai');
     assert(!fs.readFileSync(ai._internals.SETTINGS_FILE, 'utf8').includes('TEST-KEY'), 'key lọt vào ai_settings.json');
     const g = cfg.providers.find((p) => p.id === 'gemini');
     assert(g.hasKey && g.keyHint === '••••7890', JSON.stringify(g));
-    return `mode=0${mode.toString(8)}, keyHint=${g.keyHint}`;
+    return `${permNote}, keyHint=${g.keyHint}`;
   });
   await check('Base URL không an toàn (http tới máy khác) bị từ chối', () => {
     try {
@@ -586,8 +596,8 @@ async function main() {
   const syncDir = path.join(TMP, 'sync');
   fs.mkdirSync(syncDir, { recursive: true });
   const syncVideo = path.join(syncDir, 'sync_test.mp4');
-  const truthOnsets = [1.0, 6.0, 11.5];
-  const haveTingting = process.platform === 'darwin' && spawnSync('say', ['-v', '?'], { encoding: 'utf8' }).stdout.includes('Tingting');
+  let truthOnsets = [1.0, 6.0, 11.5];
+  const haveTingting = !process.env.TEST_NO_TINGTING && process.platform === 'darwin' && spawnSync('say', ['-v', '?'], { encoding: 'utf8' }).stdout.includes('Tingting');
   const onsetsOf = (file, thrDb) => {
     const r = spawnSync(FFMPEG, ['-v', 'error', '-i', file, '-vn', '-ac', '1', '-ar', '16000', '-f', 's16le', '-'], { maxBuffer: 1 << 28 });
     const b = r.stdout;
@@ -608,12 +618,32 @@ async function main() {
     }
     return out;
   };
+  const syncLines = ['大家好，今天我们来介绍一款新手机。', '它的电池可以用两天，充电也非常快。', '如果你喜欢这个视频，请点赞关注。'];
+  let fixtureVoice = '';
+  let clips = [];
   if (haveTingting) {
-    const lines = ['大家好，今天我们来介绍一款新手机。', '它的电池可以用两天，充电也非常快。', '如果你喜欢这个视频，请点赞关注。'];
-    lines.forEach((t, i) => spawnSync('say', ['-v', 'Tingting', '-o', path.join(syncDir, `s${i}.aiff`), t]));
+    clips = syncLines.map((t, i) => {
+      const f = path.join(syncDir, `s${i}.aiff`);
+      spawnSync('say', ['-v', 'Tingting', '-o', f, t]);
+      return f;
+    });
+    fixtureVoice = 'Tingting';
+  } else if (fs.existsSync(PY_CORE)) {
+    // Windows/Linux: giọng Trung Microsoft Edge (gói edge-tts trong .venv, cần Internet) — chỉ để tạo video thử
+    clips = syncLines.map((t, i) => {
+      const f = path.join(syncDir, `s${i}.mp3`);
+      spawnSync(PY_CORE, ['-m', 'edge_tts', '--voice', 'zh-CN-XiaoxiaoNeural', '--text', t, '--write-media', f], { timeout: 60000, windowsHide: true });
+      return f;
+    });
+    fixtureVoice = 'edge-tts zh-CN-XiaoxiaoNeural';
+  }
+  if (clips.length !== 3 || !clips.every((f) => fs.existsSync(f) && fs.statSync(f).size > 1000)) fixtureVoice = '';
+  if (fixtureVoice) {
+    // Mốc chuẩn = độ trễ chèn + khoảng lặng đầu thật của từng file giọng (đo bằng FFmpeg)
+    truthOnsets = truthOnsets.map((t, i) => Number((t + (onsetsOf(clips[i], -38)[0] || 0)).toFixed(3)));
     ff([
       '-f', 'lavfi', '-i', 'sine=frequency=220:sample_rate=48000:duration=18,volume=0.05',
-      '-i', path.join(syncDir, 's0.aiff'), '-i', path.join(syncDir, 's1.aiff'), '-i', path.join(syncDir, 's2.aiff'),
+      '-i', clips[0], '-i', clips[1], '-i', clips[2],
       '-filter_complex', '[1:a]aresample=48000,adelay=1000|1000[a1];[2:a]aresample=48000,adelay=6000|6000[a2];[3:a]aresample=48000,adelay=11500|11500[a3];[0:a][a1][a2][a3]amix=inputs=4:normalize=0:duration=first[a]',
       '-map', '[a]', '-ac', '1', path.join(syncDir, 'orig.wav')
     ]);
@@ -635,15 +665,16 @@ async function main() {
     });
   let syncJob = null;
   await check('Đồng bộ: lời lồng tiếng bắt đầu cùng lúc lời gốc (3 câu cách nhau 1–1,5 s, ASR không được gộp câu)', async () => {
-    if (!haveTingting) throw skip('Cần giọng hệ thống Tingting (macOS) để tạo video thử.');
+    if (!fixtureVoice) throw skip('Không tạo được video thử (cần giọng Tingting trên macOS, hoặc edge-tts + Internet).', true);
     if (!vst.sdkInstalled || !vst.modelDownloaded) throw skip('VieNeu-TTS chưa cài.');
     syncJob = await runDub({ voiceId: `vieneu:${vst.defaultVoice}`, originalVolume: 0, dubVolume: 1, autoDucking: false, removeOriginalVoice: false });
     assert(syncJob.segments.length === 3, `ASR phải ra 3 phân đoạn, nhận ${syncJob.segments.length}`);
     const dubOn = onsetsOf(syncJob.outputPath, -38);
     assert(dubOn.length >= 3, `onsets=${JSON.stringify(dubOn)}`);
     const diffs = truthOnsets.map((t) => Math.min(...dubOn.map((o) => Math.abs(o - t))));
+    if (process.env.TEST_DEBUG_SYNC) console.log("DBG truth", truthOnsets, "dub", dubOn, "asr", syncJob.segments.map((s) => [s.startSec, s.endSec, s.sourceText]));
     assert(diffs.every((d) => d <= 0.15), `lệch ${diffs.map((d) => d.toFixed(3)).join(', ')} s`);
-    return `onset lồng tiếng ${dubOn.slice(0, 3).join(' / ')} s vs gốc ${truthOnsets.join(' / ')} s (lệch tối đa ${(Math.max(...diffs) * 1000).toFixed(0)} ms)`;
+    return `[${fixtureVoice}] onset lồng tiếng ${dubOn.slice(0, 3).join(' / ')} s vs gốc ${truthOnsets.join(' / ')} s (lệch tối đa ${(Math.max(...diffs) * 1000).toFixed(0)} ms)`;
   });
   await check('Tách giọng gốc: chế độ "chỉ giữ nhạc nền" loại lời nói gốc khỏi file xuất (đo dải tần lời nói)', async () => {
     if (!syncJob) throw skip('Phụ thuộc kiểm thử đồng bộ ở trên.');
@@ -749,7 +780,7 @@ async function main() {
     return `HTTP ${r.status} cho Range bytes=0-1`;
   });
   await check('Tác vụ "Phân đoạn & Dịch" chạy nền có tiến độ từng giai đoạn và kết quả đã kiểm tra', async () => {
-    if (!fs.existsSync(syncVideo)) throw skip('Cần video thử (macOS Tingting).');
+    if (!fs.existsSync(syncVideo)) throw skip('Không tạo được video thử (Tingting / edge-tts).', true);
     const start = await req('POST', '/api/dubbing/extract-task/start', { 'Content-Type': 'application/json' }, JSON.stringify({ videoPath: syncVideo, targetLang: 'vi', translationProvider: 'local', autoDiarize: false }));
     const taskId = JSON.parse(start.body).task.taskId;
     let task;
