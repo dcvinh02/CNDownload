@@ -148,7 +148,7 @@ function start({ allowDownload = false } = {}) {
   };
   if (!allowDownload) env.HF_HUB_OFFLINE = '1';
   buffer = '';
-  const child = spawn(PYTHON_BIN, ['-I', WORKER, '--voices-cache', VOICES_CACHE], {
+  const child = spawn(PYTHON_BIN, ['-I', '-X', 'utf8', WORKER, '--voices-cache', VOICES_CACHE], {
     stdio: ['pipe', 'pipe', 'pipe'],
     env
   });

@@ -24,6 +24,14 @@ import time
 import traceback
 
 
+# Windows: console/pipe mặc định cp1252 → ký tự tiếng Việt/emoji gây UnicodeEncodeError. Ép UTF-8 cho giao thức.
+for _s in (sys.stdin, sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace" if _s is sys.stderr else "strict")
+    except Exception:
+        pass
+
+
 def emit(obj):
     sys.__stdout__.write("VN_JSON:" + json.dumps(obj, ensure_ascii=False) + "\n")
     sys.__stdout__.flush()

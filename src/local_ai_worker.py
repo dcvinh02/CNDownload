@@ -21,6 +21,14 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import wave
+
+
+# Windows: console/pipe mặc định cp1252 → ký tự tiếng Việt/emoji gây UnicodeEncodeError. Ép UTF-8 cho giao thức.
+for _s in (sys.stdin, sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace" if _s is sys.stderr else "strict")
+    except Exception:
+        pass
 import numpy as np
 
 
