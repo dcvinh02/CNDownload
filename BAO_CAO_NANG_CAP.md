@@ -8,7 +8,7 @@
 | Môi trường Python AI (`.venv`) trong repo là bản **macOS**, không có gì tạo lại trên Windows | Trên Windows: nhận dạng giọng nói, tách giọng, TTS, dịch Offline đều không chạy | `src/python_env.js` + `requirements/*.txt`: tự cài `uv` → Python 3.12 độc lập → `.venv` (chạy được trên Windows/macOS); mục "Môi trường Python AI" trong trình cài |
 | Dữ liệu phân đoạn truyền qua tham số dòng lệnh | Windows giới hạn 32.767 ký tự; video 38 phút cần 95.761 ký tự → lỗi | Truyền qua file tạm (`--payload-file`), tự xóa sau khi xong |
 | Giải nén bằng `tar -xjf` / `unzip` | Windows không có `unzip`; `tar` của Windows không chắc hỗ trợ bz2 | Giải nén bằng Python (tarfile/zipfile), có chặn đường dẫn nguy hiểm |
-| AI Local Qwen (MLX) chỉ chạy trên Mac | Windows không có dịch Offline chất lượng tốt | Cho phép "API tương thích OpenAI" trỏ tới **Ollama/LM Studio trên máy, không cần key, không cần đồng ý Cloud**; Argos là dự phòng; ẩn mục Qwen trên Windows |
+| AI Local Qwen (MLX) chỉ chạy trên Mac | Windows không có dịch Offline chất lượng tốt | **Qwen3.5 9B trên Windows bằng llama.cpp** (b12387 Vulkan, GGUF Q4_K_M `unsloth/Qwen3.5-9B-GGUF`, ghim revision + SHA-256), cài 1 nút, không cần quyền Admin. Argos/Whisper tiny/base (đã kiểm nghiệm kém) không còn được cài. Vẫn hỗ trợ Ollama/LM Studio qua "API tương thích OpenAI" |
 | Giọng hệ thống macOS (Linh, Tingting…) hiện trên Windows | SAPI Windows đọc bằng giọng mặc định (tiếng Anh) → đọc tiếng Việt sai | Chỉ cho giọng hệ thống tiếng Anh trên Windows |
 | `fs.existsSync(null)` khi chưa có ffmpeg | Cảnh báo, sẽ thành lỗi ở Node bản mới | Kiểm tra null |
 | Repo/lịch sử git: 694 MB, có file 138 MB, video cá nhân, `.venv`, `node_modules` | GitHub từ chối file > 100 MB; lộ dữ liệu riêng | `.gitignore` mới: repo chỉ còn mã nguồn |
@@ -35,10 +35,21 @@ Những gì bị loại khỏi repo đều được tạo lại tự động: `n
 | Ollama/LM Studio không cần key | PASS | Test giao thức: `usedCloud=false`, không cần đồng ý Cloud |
 | Mô phỏng nhánh code Windows (`process.platform=win32`) | PASS | Mọi API trả 200, đường dẫn `.venv\Scripts\python.exe`, `yt-dlp.exe`, `uv-x86_64-pc-windows-msvc.zip`, ẩn Qwen/WebKit |
 | Dự án chính sau thay đổi | PASS | 39/39 + 53/53 |
-| **Chạy trên máy Windows thật** | **BLOCKED** | Không có máy Windows. Đã thêm `.github/workflows/ci.yml` — GitHub sẽ tự cài & chạy toàn bộ test trên Windows thật mỗi lần đẩy code |
+| **Chạy trên máy Windows thật (GitHub `windows-latest`, CPU, không GPU)** | **PASS** | Run [43642879593](https://github.com/dcvinh02/CNDownload/actions/runs/43642879593): cài từ trống kể cả Qwen3.5 9B (dịch thử 6,7 s), **39/39 + 54/54**, `Start_App_Windows.bat` mở được app, giao diện + API phản hồi, 9/9 công cụ "đã cài" |
+| Giao diện trên Windows có màn hình (bấm thật) | Chưa kiểm | CI không có màn hình — cần thử trên máy Windows có người dùng |
 
-### 3.4. Cài trên Windows
-1. Cài [Node.js LTS](https://nodejs.org). 2. Giải nén mã nguồn vào đường dẫn ngắn (vd. `C:\CNVideo`). 3. Nhấp đúp `Start_App_Windows.bat` — lần đầu tự `npm install` + `setup` (~2,2 GB), các lần sau mở thẳng ứng dụng. Dịch AI không cần key trên Windows: cài [Ollama](https://ollama.com), tải 1 model (vd. `ollama pull qwen2.5:7b`), nhập Base URL `http://127.0.0.1:11434/v1` ở mục "API tương thích OpenAI".
+### 3.4. Lỗi chỉ lộ ra trên Windows thật (CI) — đã sửa
+| Lỗi | Nguyên nhân | Sửa | Bằng chứng |
+|---|---|---|---|
+| VieNeu-TTS dừng khi cài | Console cp1252; worker chạy `-I` nên bỏ qua PYTHONUTF8 → `UnicodeEncodeError` ở tên giọng có "⭐" | `-X utf8` + ép stdin/stdout/stderr UTF-8 trong worker | Tái hiện bằng cp1252 trên Mac; CI Windows cài VieNeu OK |
+| Video chỉ có nhạc vẫn ra "lời thoại" | Lượt thử lại không VAD làm Whisper bịa chữ trên CPU x86 | Chỉ thử lại khi Silero VAD (ngưỡng 0,25) thấy tiếng nói; bỏ đoạn avg_logprob < −1 / compression > 2,4 | sine 0 s tiếng nói vs lời thật 4,6 s; test PASS trên Windows |
+| File API Key ai cũng đọc được | `chmod 0600` vô tác dụng trên Windows (quyền 666) | ACL `icacls`: bỏ kế thừa, chỉ tài khoản hiện tại | Test kiểm ACL thật PASS trên Windows |
+| Lời lồng tiếng vào sớm ~0,2 s | Whisper đặt mốc từ đầu sớm hơn lời nói thật | Căn mốc theo năng lượng âm thanh (chỉ dời về sau ≤ 0,4 s, khi trước đó là khoảng lặng ≥ 20 dB) | edge-tts 180→30 ms; video Bilibili thật dời tối đa 70 ms |
+| llama-server mồ côi giữ ~6 GB RAM | `kill()` trên Windows = TerminateProcess wrapper, không kịp dọn | Job Object KILL_ON_JOB_CLOSE + tắt bằng đóng stdin | Test Windows: tắt thường & diệt wrapper đều về 0 tiến trình sau 1,2 s |
+| Dịch AI trên máy bị hủy giữa chừng | Giới hạn 90 s mỗi lần gọi; CPU không GPU chậm | AI localhost: 20 phút | — |
+
+### 3.5. Cài trên Windows
+1. Cài [Node.js LTS](https://nodejs.org). 2. Giải nén mã nguồn vào đường dẫn ngắn (vd. `C:\CNVideo`). 3. Nhấp đúp `Start_App_Windows.bat` — lần đầu tự `npm install` + `setup` (~2,2 GB), các lần sau mở thẳng ứng dụng. Lần đầu tự cài cả **AI dịch Local Qwen3.5 9B** (~5,8 GB, nên có RAM 16 GB; GPU NVIDIA/AMD/Intel được dùng qua Vulkan nếu có). Máy yếu: `node scripts/setup.js --no-llm` rồi dùng Gemini.
 
 ---
 
