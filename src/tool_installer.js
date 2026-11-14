@@ -390,9 +390,9 @@ function downloadFileWithProgress(url, destPath, onProgress = null, redirectCoun
   });
 }
 
-function runShellCommand(bin, args, timeoutMs = 120000) {
+function runShellCommand(bin, args, timeoutMs = 120000, env = null) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, ...(env ? { env } : {}) });
     let stdout = '';
     let stderr = '';
     const timer = setTimeout(() => {
@@ -415,7 +415,7 @@ function runShellCommand(bin, args, timeoutMs = 120000) {
     proc.on('close', (code) => {
       clearTimeout(timer);
       if (code === 0) resolve({ stdout, stderr });
-      else reject(new Error(`Lệnh ${bin} kết thúc với mã ${code}: ${stderr.slice(-300) || stdout.slice(-300)}`));
+      else reject(new Error(`Lệnh ${bin} kết thúc với mã ${code}: ${[stdout.trim().slice(-300), stderr.trim().slice(-300)].filter(Boolean).join(' | ')}`));
     });
   });
 }
@@ -914,6 +914,16 @@ async function installLocalLlm(job) {
 
 const psQuote = (p) => `'${String(p).replace(/'/g, "''")}'`;
 
+/**
+ * Chạy Windows PowerShell 5.1. Xóa PSModulePath kế thừa: nếu ứng dụng được mở từ PowerShell 7 (pwsh), biến này trỏ
+ * tới module của bản 7 → PowerShell 5.1 không nạp được Microsoft.PowerShell.Security (Get-AuthenticodeSignature...).
+ */
+function runPowerShell(script, timeoutMs) {
+  const env = { ...process.env };
+  for (const k of Object.keys(env)) if (k.toLowerCase() === 'psmodulepath') delete env[k];
+  return runShellCommand('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script], timeoutMs, env);
+}
+
 /** Tải bộ cài VC++ Redistributable chính thức (aka.ms của Microsoft) và xác minh chữ ký số Microsoft. */
 async function downloadVerifiedVcRedist(onStep = () => {}) {
   const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
@@ -923,10 +933,11 @@ async function downloadVerifiedVcRedist(onStep = () => {}) {
     onStep(`Đang tải Microsoft Visual C++ Redistributable (${(done / 1048576).toFixed(0)}/${((total || 26e6) / 1048576).toFixed(0)} MB)...`);
   });
   const check =
+    'Import-Module Microsoft.PowerShell.Security -ErrorAction Stop; ' +
     `$s = Get-AuthenticodeSignature -LiteralPath ${psQuote(file)}; ` +
     "if ($s.Status -ne 'Valid' -or $s.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') { Write-Output ('INVALID ' + $s.Status + ' ' + $s.SignerCertificate.Subject); exit 3 }; Write-Output 'VALID'";
   try {
-    await runShellCommand('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', check], 60000);
+    await runPowerShell(check, 60000);
   } catch (err) {
     fs.rmSync(file, { force: true });
     throw new Error(`Bộ cài VC++ tải về không có chữ ký hợp lệ của Microsoft — đã xóa, không chạy. ${err.message.slice(0, 200)}`);
@@ -948,7 +959,7 @@ async function ensureVcRedist(job) {
   const install =
     `$p = Start-Process -FilePath ${psQuote(file)} -ArgumentList '/install','/quiet','/norestart' -Verb RunAs -Wait -PassThru; exit $p.ExitCode`;
   try {
-    await runShellCommand('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', install], 15 * 60 * 1000);
+    await runPowerShell(install, 15 * 60 * 1000);
   } catch (err) {
     // 3010 = cần khởi động lại, 1638 = đã có bản mới hơn — đều coi là thành công nếu DLL đã có
     if (localLlm.missingVcRuntime().length) {
