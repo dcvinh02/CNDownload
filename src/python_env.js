@@ -195,6 +195,37 @@ async function pythonImports(venvDir, modules) {
  * Tạo (nếu cần) một môi trường ảo Python 3.12 và cài requirements.
  * Bỏ qua nếu môi trường đã import được các module kiểm tra (không cài lại môi trường đang chạy tốt).
  */
+/**
+ * Python 3.12 độc lập trong bin/tools/python. Đã có và chạy được thì KHÔNG cài lại.
+ * uv tạo "liên kết phiên bản" cpython-3.12-… (symlink trên macOS, junction trên Windows) trỏ tới bản đầy đủ
+ * cpython-3.12.x-…. Khi thư mục dự án bị copy/giải nén/khôi phục từ bộ nhớ đệm, liên kết này thành thư mục thường
+ * → `uv python install` lỗi "Failed to create Python minor version link directory". Khi đó xóa thư mục thường
+ * đó (không phải liên kết) rồi cài lại.
+ */
+async function ensureManagedPython(uv, { forceInstall = false } = {}) {
+  if (!forceInstall) try {
+    const found = (await run(uv, ['python', 'find', '--system', PYTHON_VERSION], { env: uvEnv(), timeoutMs: 60000 })).trim().split(/\r?\n/).pop();
+    if (found && fs.existsSync(found)) {
+      await run(found, ['-c', 'import sys; assert sys.version_info[:2] == (3, 12)'], { timeoutMs: 60000 });
+      return found;
+    }
+  } catch (_) {}
+  try {
+    await run(uv, ['python', 'install', PYTHON_VERSION], { env: uvEnv(), timeoutMs: 1800000 });
+  } catch (err) {
+    if (!/minor version link/i.test(err.message)) throw err;
+    const pyDir = path.join(TOOLS_DIR, 'python');
+    for (const name of fs.readdirSync(pyDir)) {
+      // chỉ tên dạng cpython-3.12-<nền tảng> (không có số bản vá) và là thư mục thường, không phải liên kết
+      if (!new RegExp(`^cpython-${PYTHON_VERSION.replace('.', '\\.')}-`).test(name)) continue;
+      const full = path.join(pyDir, name);
+      if (!fs.lstatSync(full).isSymbolicLink()) fs.rmSync(full, { recursive: true, force: true });
+    }
+    await run(uv, ['python', 'install', PYTHON_VERSION], { env: uvEnv(), timeoutMs: 1800000 });
+  }
+  return null;
+}
+
 async function ensureVenv(kind, { requirements, checkModules, onStep = () => {}, sync = false }) {
   const venvDir = VENVS[kind];
   if (await pythonImports(venvDir, checkModules)) {
@@ -211,7 +242,7 @@ async function ensureVenv(kind, { requirements, checkModules, onStep = () => {},
   }
   const uv = await ensureUv(onStep);
   onStep(`Đang chuẩn bị Python ${PYTHON_VERSION} (bản độc lập, không ảnh hưởng Python của hệ thống)...`);
-  await run(uv, ['python', 'install', PYTHON_VERSION], { env: uvEnv(), timeoutMs: 1800000 });
+  await ensureManagedPython(uv);
   if (!fs.existsSync(venvPython(venvDir))) {
     onStep(`Đang tạo môi trường ${path.basename(venvDir)}...`);
     await run(uv, ['venv', venvDir, '--python', PYTHON_VERSION], { env: uvEnv(), timeoutMs: 600000 });
@@ -285,5 +316,6 @@ module.exports = {
   ensureVieneuVenv,
   ensureLlmVenv,
   extractArchive,
+  _internals: { ensureManagedPython },
   pythonImports
 };
