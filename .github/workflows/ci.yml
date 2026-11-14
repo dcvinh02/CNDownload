@@ -66,3 +66,14 @@ jobs:
           Get-Process node, llama-server -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
           if ($missing.Count -gt 0) { throw ("Còn thiếu: " + (($missing | ForEach-Object { $_.id }) -join ', ')) }
           Write-Host 'OK: Start_App_Windows.bat mở được ứng dụng, giao diện + API phản hồi, đủ công cụ'
+
+      - name: Tạo lối tắt Desktop (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cmd /c Tao_Shortcut_Desktop.bat --quiet
+          $lnk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'CN Video Scraper Pro.lnk'
+          if (-not (Test-Path $lnk)) { throw "Không tạo được $lnk" }
+          $t = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk).TargetPath
+          if ($t -notmatch 'Start_App_Windows\.bat$') { throw "Lối tắt trỏ sai: $t" }
+          Write-Host "OK: lối tắt Desktop → $t"

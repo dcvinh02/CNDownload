@@ -22,9 +22,11 @@ if errorlevel 1 (
   echo [2/2] Dang cai cac thanh phan AI ^(Python, model^) - chi lam 1 lan, can Internet...
   node scripts\setup.js --yes
   if errorlevel 1 goto :fail
+  if not exist "%USERPROFILE%\Desktop\CN Video Scraper Pro.lnk" call "%~dp0Tao_Shortcut_Desktop.bat" --quiet
 )
 
-echo Dang khoi dong CN Video Scraper Pro...
+echo Dang khoi dong CN Video Scraper Pro... (cua so ung dung se tu mo)
+echo Giu cua so den nay mo trong khi dung. Dong no (hoac dong cua so ung dung) de tat ung dung.
 node src\launcher.js
 exit /b 0
 

@@ -6,6 +6,7 @@
 
 const { spawn } = require('child_process');
 const path = require('path');
+const os = require('os');
 const fs = require('fs');
 const { createServer } = require('./server');
 
@@ -40,15 +41,31 @@ function launchWindowsAppWindow(url, onWindowClose) {
     path.join(process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)', 'Google\\Chrome\\Application\\chrome.exe'),
     path.join(process.env.LOCALAPPDATA || '', 'Google\\Chrome\\Application\\chrome.exe')
   ];
+  // Hồ sơ trình duyệt RIÊNG cho cửa sổ ứng dụng: nếu dùng hồ sơ mặc định mà Edge/Chrome đang chạy (Windows 10/11 bật
+  // "Startup boost" nên Edge gần như luôn chạy ngầm), tiến trình mới chỉ chuyển yêu cầu cho Edge cũ rồi THOÁT NGAY —
+  // ứng dụng tưởng cửa sổ đã đóng và tắt máy chủ. Hồ sơ riêng buộc mở 1 tiến trình sống đúng bằng vòng đời cửa sổ.
+  const profileDir = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'CNVideoScraperPro', 'app-window');
+  try {
+    fs.mkdirSync(profileDir, { recursive: true });
+  } catch (_) {}
 
   for (const bin of candidates) {
     if (bin && fs.existsSync(bin)) {
-      const proc = spawn(bin, [`--app=${url}`, '--window-size=1360,860'], {
-        detached: false,
-        stdio: 'ignore'
-      });
+      const startedAt = Date.now();
+      const proc = spawn(
+        bin,
+        [`--app=${url}`, '--window-size=1360,860', `--user-data-dir=${profileDir}`, '--no-first-run', '--no-default-browser-check'],
+        { detached: false, stdio: 'ignore' }
+      );
       proc.on('error', () => {});
       proc.on('close', () => {
+        // Phòng hờ: tiến trình thoát quá nhanh (< 5 s) nghĩa là đã chuyển cho trình duyệt khác chứ không phải người dùng
+        // đóng cửa sổ → giữ máy chủ chạy, người dùng tắt bằng cách đóng cửa sổ dòng lệnh.
+        if (Date.now() - startedAt < 5000) {
+          console.log(`[CN Video Downloader] Giao diện đang mở trong trình duyệt: ${url}`);
+          console.log('[CN Video Downloader] Đóng cửa sổ dòng lệnh này để tắt ứng dụng.');
+          return;
+        }
         if (typeof onWindowClose === 'function') onWindowClose();
       });
       return;
@@ -59,6 +76,7 @@ function launchWindowsAppWindow(url, onWindowClose) {
   const fallback = spawn('cmd.exe', ['/c', 'start', '', url], { detached: true, stdio: 'ignore' });
   fallback.on('error', () => {});
   fallback.unref();
+  console.log(`[CN Video Downloader] Giao diện đang mở trong trình duyệt: ${url} — đóng cửa sổ dòng lệnh này để tắt ứng dụng.`);
 }
 
 function listenWithFallbackPort(app, preferredPort) {

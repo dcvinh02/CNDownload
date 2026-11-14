@@ -39,7 +39,10 @@ Kho mã nguồn chỉ chứa **mã nguồn (~2 MB)**. Môi trường Python, mod
 ### Windows
 1. Tải mã nguồn (GitHub: *Code → Download ZIP*, hoặc gói `CNVideoScraperPro-source-*.zip` từ Drive) và giải nén — nên đặt ở đường dẫn ngắn, ví dụ `C:\CNVideo`.
 2. Nhấp đúp **`Start_App_Windows.bat`**. Lần đầu file này tự chạy `npm install` và `scripts/setup.js` (tạo Python 3.12 riêng, tải model ~2,3 GB **+ AI dịch Local Qwen3.5 9B ~5,8 GB**), các lần sau mở thẳng ứng dụng. Không cần quyền Administrator, không cài gì vào hệ thống.
-3. Máy yếu / ít RAM: bỏ Qwen bằng `node scripts/setup.js --no-llm` rồi dùng Gemini (miễn phí qua AI Studio). Có thể cài Qwen sau bằng nút **🧰 Công cụ → "AI dịch Local Qwen3.5 9B"**.
+3. **Mở ứng dụng:** chạy xong, app **tự mở** trong một cửa sổ riêng (Edge/Chrome dạng ứng dụng). Lần cài đầu tạo sẵn lối tắt **"CN Video Scraper Pro"** trên Desktop — các lần sau nhấp đúp lối tắt đó (hoặc `Start_App_Windows.bat`). Thiếu lối tắt: chạy `Tao_Shortcut_Desktop.bat`.
+   - Cửa sổ dòng lệnh màu đen là máy chủ của app: **giữ nó mở** khi dùng; đóng nó hoặc đóng cửa sổ app là tắt ứng dụng.
+   - Cửa sổ app không hiện ra: mở trình duyệt và vào `http://127.0.0.1:3889`.
+4. Máy yếu / ít RAM: bỏ Qwen bằng `node scripts/setup.js --no-llm` rồi dùng Gemini (miễn phí qua AI Studio). Có thể cài Qwen sau bằng nút **🧰 Công cụ → "AI dịch Local Qwen3.5 9B"**.
 
 ### macOS
 ```bash
