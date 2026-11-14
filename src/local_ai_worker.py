@@ -433,7 +433,7 @@ class LocalArgosTranslator:
                 mode = "Offline Local (Whisper ZH->EN + Argos EN->VI)"
             else:
                 raise RuntimeError(
-                    "Thiếu mô hình dịch Offline (translate-zh_en-1_9 / translate-en_vi-1_9). Vui lòng tải công cụ dịch hoặc bật cho phép dịch Cloud."
+                    "Thiếu mô hình dịch Offline — chưa cài bộ dịch Offline: mở mục \"Công cụ\" → cài \"AI dịch Local Qwen3.5 9B\" (dịch ngay trên máy, không cần API Key), hoặc bật dịch AI Cloud (Gemini)."
                 )
 
         elif src in ("ja", "ko") and tgt in ("en", "vi"):

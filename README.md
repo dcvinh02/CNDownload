@@ -34,11 +34,12 @@ Hệ thống tự động kiểm tra sự tồn tại của binary, quyền th�
 
 Kho mã nguồn chỉ chứa **mã nguồn (~2 MB)**. Môi trường Python, model AI, ffmpeg, yt-dlp được tải tự động từ nguồn chính thức ở lần chạy đầu.
 
-**Yêu cầu:** [Node.js 20+](https://nodejs.org) (bản LTS) • Internet ở lần cài đầu • ~3 GB trống (thêm 5,6 GB nếu dùng AI Local Qwen trên Mac).
+**Yêu cầu:** [Node.js 20+](https://nodejs.org) (bản LTS) • Internet ở lần cài đầu • ~3 GB trống + 5,8 GB cho AI dịch Local Qwen3.5 9B • Windows: nên có RAM 16 GB.
 
 ### Windows
 1. Tải mã nguồn (GitHub: *Code → Download ZIP*, hoặc gói `CNVideoScraperPro-source-*.zip` từ Drive) và giải nén — nên đặt ở đường dẫn ngắn, ví dụ `C:\CNVideo`.
-2. Nhấp đúp **`Start_App_Windows.bat`**. Lần đầu file này tự chạy `npm install` và `scripts/setup.js` (tạo Python 3.12 riêng, tải model ~2,3 GB), các lần sau mở thẳng ứng dụng.
+2. Nhấp đúp **`Start_App_Windows.bat`**. Lần đầu file này tự chạy `npm install` và `scripts/setup.js` (tạo Python 3.12 riêng, tải model ~2,3 GB **+ AI dịch Local Qwen3.5 9B ~5,8 GB**), các lần sau mở thẳng ứng dụng. Không cần quyền Administrator, không cài gì vào hệ thống.
+3. Máy yếu / ít RAM: bỏ Qwen bằng `node scripts/setup.js --no-llm` rồi dùng Gemini (miễn phí qua AI Studio). Có thể cài Qwen sau bằng nút **🧰 Công cụ → "AI dịch Local Qwen3.5 9B"**.
 
 ### macOS
 ```bash
@@ -60,7 +61,7 @@ npm start
 |---|---|---|
 | Tải video, lồng tiếng, VieNeu-TTS, tách giọng, nhận diện người nói | ✅ | ✅ |
 | Dịch AI Cloud (Gemini/OpenAI) | ✅ | ✅ |
-| AI dịch Local không cần key | Qwen3.5-9B (Apple MLX) | Ollama / LM Studio qua "API tương thích OpenAI" (`http://127.0.0.1:11434/v1`, không cần key); dự phòng Argos |
+| AI dịch Local Qwen3.5 9B (không cần key, không gửi dữ liệu) | Apple MLX 4-bit (GPU Metal) | llama.cpp + GGUF Q4_K_M (GPU NVIDIA/AMD/Intel qua Vulkan, tự chạy CPU nếu không có GPU) — cài tự động |
 | Quét hồ sơ Douyin/Kuaishou bằng WebKit | ✅ | Có điều kiện (dùng Cookie + yt-dlp) |
 | Giọng đọc hệ điều hành | Giọng macOS (Linh, Tingting...) | Chỉ giọng tiếng Anh mặc định của Windows |
 
@@ -131,8 +132,8 @@ npm start
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Sherpa-ONNX Piper Neural VITS (`vi_piper_vais1000`)** | Tổng hợp giọng đọc tiếng Việt chất lượng cao (Nữ Bắc — Đề xuất mặc định) | `62 MB` | MIT License | RAM >= 512 MB (CPU) | **Đã cài đặt & Hoạt động Offline** |
 | **Sherpa-ONNX Piper Neural VITS (`vi_piper_25hours` / `vivos`)** | Giọng Nam Bắc, Nam/Nữ Nam Bộ và 65 người nói VIVOS | `60 - 75 MB` | MIT / Apache 2.0 | RAM >= 512 MB (CPU) | **Đã cài đặt & Hoạt động Offline** |
-| **Faster-Whisper Local (`whisper-base` / `tiny`)** | Nhận diện giọng nói thành lời thoại thực tế có mốc thời gian (STT/ASR Offline) | `75 - 145 MB` | MIT License | RAM >= 1.0 GB (CPU) | **Đã cài đặt & Hoạt động Offline** |
-| **Argos NMT Local (`zh -> en -> vi`)** | Dịch thuật thần kinh NMT 100% Offline qua CTranslate2 | `90 - 210 MB` | MIT License | RAM >= 1.0 GB (CPU) | **Đã cài đặt & Hoạt động Offline** |
+| **Faster-Whisper Local (`small`)** | Nhận diện giọng nói thành lời thoại thực tế có mốc thời gian (STT/ASR Offline) | `464 MB` | MIT License | RAM >= 2 GB (CPU) | **Cài tự động** (bản tiny/base đã loại vì kém) |
+| **Qwen3.5 9B (MLX 4-bit trên Mac • GGUF Q4_K_M + llama.cpp trên Windows)** | Dịch Trung/Nhật/Hàn → Việt ngay trên máy, giữ ID/mốc thời gian | `5,6 – 5,8 GB` | Apache-2.0 / MIT | Mac M1+ RAM 8 GB • Windows RAM 16 GB | **Cài tự động trên Windows** (Mac: `npm run setup:full`). Thay Argos (đã loại vì kém) |
 | **macOS AVSpeechSynthesizer / Windows SAPI** | Tổng hợp giọng đọc TTS hệ điều hành (Việt, Trung, Anh, Nhật, Hàn) | `0 MB` | System Native | RAM >= 256 MB (CPU) | **Có sẵn trong Hệ điều hành** |
 | **FFmpeg Media Engine 6.0+** | Tách audio 16kHz, chuẩn hóa MP4, bộ lọc Auto-Ducking và ghép video | `76 MB` | LGPL v2.1+ / GPL v2 | RAM >= 512 MB (CPU) | **Đã cài đặt trong `bin/ffmpeg`** |
 

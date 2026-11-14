@@ -1124,14 +1124,6 @@ function isAiTranslationProvider(v) {
   return v === 'ai' || v.startsWith('ai_');
 }
 
-const NO_OFFLINE_TRANSLATOR_MSG =
-  'Chưa cài bộ dịch Offline: mở mục "Công cụ" → cài "AI dịch Local Qwen3.5 9B" (dịch ngay trên máy, không cần API Key), hoặc bật dịch AI Cloud (Gemini).';
-
-function isArgosInstalled() {
-  const root = path.join(PROJECT_ROOT, 'bin', 'models', 'argos');
-  return ['translate-zh_en-1_9', 'translate-en_vi-1_9'].every((d) => fs.existsSync(path.join(root, d, 'model')));
-}
-
 function resolveEffectiveTranslationProvider(rawProvider, cloudConsent) {
   const v = normalizeTranslationProvider(rawProvider);
   // AI Local (Qwen) chạy trên máy: không cần đồng ý gửi Cloud
@@ -1141,7 +1133,6 @@ function resolveEffectiveTranslationProvider(rawProvider, cloudConsent) {
   // "Offline trên máy": dùng AI Local Qwen (chất lượng cao hơn hẳn Argos) khi đã cài; Argos chỉ còn là dự phòng nếu có
   if (v === 'local' && isProviderReady('local_qwen')) return 'ai_local_qwen';
   if (v === 'local' && isLocalProvider('openai_compatible') && isProviderReady('openai_compatible')) return 'ai_openai_compatible';
-  if (v === 'local' && !isArgosInstalled()) throw new Error(NO_OFFLINE_TRANSLATOR_MSG);
   if ((v === 'cloud_google' || isAiTranslationProvider(v)) && !cloudConsent) {
     throw new Error('Bộ dịch Cloud/AI yêu cầu tích chọn đồng ý gửi văn bản lên dịch vụ đám mây để bảo vệ riêng tư.');
   }
@@ -1149,7 +1140,6 @@ function resolveEffectiveTranslationProvider(rawProvider, cloudConsent) {
     if (!cloudConsent) {
       if (isProviderReady('local_qwen')) return 'ai_local_qwen';
       if (isLocalProvider('openai_compatible') && isProviderReady('openai_compatible')) return 'ai_openai_compatible';
-      if (!isArgosInstalled()) throw new Error(NO_OFFLINE_TRANSLATOR_MSG);
       return 'local';
     }
     try {
