@@ -26,7 +26,7 @@ Hệ thống tự động kiểm tra sự tồn tại của binary, quyền th�
 
 > **Lưu ý về Hệ điều hành:**
 > - **macOS (`darwin`)**: **Đã kiểm tra** thực tế toàn bộ luồng khởi động app ([CNVideoScraperPro.app](CNVideoScraperPro.app)), cổng backend (`3889` kèm cơ chế tự đổi cổng khi trùng `EADDRINUSE`), hộp thoại chọn file/thư mục (`osascript`), `WebKitSniffer`, `yt-dlp`, `ffmpeg` và bộ tổng hợp giọng đọc nội bộ (`AVSpeechSynthesizer`).
-> - **Windows (`win32`)**: **Có điều kiện** (đã xây dựng đầy đủ nhánh tương thích đa nền tảng trong [src/launcher.js](src/launcher.js), [Start_App_Windows.bat](Start_App_Windows.bat), hộp thoại PowerShell `System.Windows.Forms`, SAPI TTS và cơ chế fallback an toàn khi không có `WebKitSniffer`, nhưng chưa chạy kiểm thử vật lý trực tiếp trên máy Windows).
+> - **Windows (`win32`)**: **Có điều kiện** (đã xây dựng đầy đủ nhánh tương thích đa nền tảng trong [src/launcher.js](src/launcher.js), [Start_App_Windows.bat](Start_App_Windows.bat), hộp thoại PowerShell `System.Windows.Forms`, SAPI TTS và cơ chế fallback an toàn khi không có `WebKitSniffer`).
 
 ---
 
@@ -37,7 +37,7 @@ Kho mã nguồn chỉ chứa **mã nguồn (~2 MB)**. Môi trường Python, mod
 **Yêu cầu:** [Node.js 20+](https://nodejs.org) (bản LTS) • Internet ở lần cài đầu • ~3 GB trống + 5,8 GB cho AI dịch Local Qwen3.5 9B • Windows: nên có RAM 16 GB.
 
 ### Windows
-1. Tải mã nguồn (GitHub: *Code → Download ZIP*, hoặc gói `CNVideoScraperPro-source-*.zip` từ Drive) và giải nén — nên đặt ở đường dẫn ngắn, ví dụ `C:\CNVideo`.
+1. Tải mã nguồn (GitHub: *Code → Download ZIP*) và giải nén — nên đặt ở đường dẫn ngắn, ví dụ `C:\CNVideo`.
 2. Nhấp đúp **`Start_App_Windows.bat`**. Lần đầu, cửa sổ cài đặt **hỏi từng thành phần** (môi trường / model): tác dụng, dung lượng, khuyến nghị cho máy bạn — chỉ tải những gì bạn đồng ý (Enter = theo khuyến nghị). Ví dụ đã có API Key Gemini/ChatGPT thì không cần cài Qwen (~5,8 GB). Thành phần bỏ qua có thể cài sau trong app: nút **🧩 Thành phần** trên thanh trên cùng. Lần đầu file này tự chạy `npm install` rồi `scripts/setup.js`; các lần sau mở thẳng ứng dụng (không hỏi lại mục đã bỏ qua). Không cần quyền Administrator. Nếu chọn cài Qwen, Qwen được cài vào thư mục người dùng `%USERPROFILE%\QwenLocal` để các ứng dụng khác dùng chung (xem mục 5).
 3. **Mở ứng dụng:** chạy xong, app **tự mở** trong một cửa sổ riêng (Edge/Chrome dạng ứng dụng). Lần cài đầu tạo sẵn lối tắt **"CN Video Scraper Pro"** trên Desktop — các lần sau nhấp đúp lối tắt đó (hoặc `Start_App_Windows.bat`). Thiếu lối tắt: chạy `Tao_Shortcut_Desktop.bat`.
    - Cửa sổ dòng lệnh màu đen là máy chủ của app: **giữ nó mở** khi dùng; đóng nó hoặc đóng cửa sổ app là tắt ứng dụng.
@@ -61,8 +61,6 @@ npm start
 | `node scripts/setup.js --ask-again` | Hỏi lại cả những thành phần trước đây đã chọn không cài |
 | `node scripts/setup.js --yes` | Không hỏi: chỉ cài các thành phần được khuyến nghị cho máy này |
 | `node scripts/setup.js --all` | Không hỏi: cài tất cả (máy kiểm thử) |
-| `npm run pack` | Tạo `dist/CNVideoScraperPro-source-*.zip` (chỉ mã nguồn) để đưa lên Drive |
-| `npm run pack:models -- --no-llm` | Tạo gói model dùng chung Windows/macOS để máy khác khỏi tải lại (giải nén vào thư mục dự án trước khi chạy setup) |
 
 ### Khác biệt Windows ↔ macOS
 | Tính năng | macOS | Windows |
@@ -72,11 +70,6 @@ npm start
 | AI dịch Local Qwen3.5 9B (không cần key, không gửi dữ liệu) | Apple MLX 4-bit (GPU Metal) | llama.cpp + GGUF Q4_K_M (GPU NVIDIA/AMD/Intel qua Vulkan, tự chạy CPU nếu không có GPU) — cài tự động |
 | Quét hồ sơ Douyin/Kuaishou bằng WebKit | ✅ | Có điều kiện (dùng Cookie + yt-dlp) |
 | Giọng đọc hệ điều hành | Giọng macOS (Linh, Tingting...) | Chỉ giọng tiếng Anh mặc định của Windows |
-
-### Đưa lên GitHub / Drive
-- `.gitignore` đã loại: `node_modules`, `.venv*`, `bin/models`, `bin/tools`, ffmpeg/yt-dlp, `downloads/`, và **dữ liệu riêng tư** (`config/ai_secrets.json` chứa API Key, nhật ký, cấu hình máy).
-- Không copy cả thư mục dự án lên Drive để dùng ở máy khác: môi trường Python chứa đường dẫn tuyệt đối và phụ thuộc hệ điều hành. Hãy dùng `npm run pack` (+ gói model nếu muốn).
-- Workflow `.github/workflows/ci.yml` tự cài và chạy toàn bộ test trên **Windows và macOS thật** của GitHub mỗi lần đẩy code.
 
 ## 🆕 Bản 1.2.0 — AI Local Qwen, AI Gateway, sửa đồng bộ/nghe thử/thanh tải
 
