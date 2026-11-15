@@ -680,6 +680,14 @@ def align_bridge_by_time(segments, en_segs):
 
 SENTENCE_END_RE = re.compile(r"[。！？!?；;…]$|[.](?=\s*$)")
 
+# Whisper đôi khi viết dấu câu dạng "cỡ nhỏ" (﹐ U+FE50, ﹒ ﹔ ﹕ ﹖ ﹗ ﹑) thay cho ，。；：？！、 — quy đổi về dạng chuẩn,
+# nếu không bộ chia câu không nhận ra dấu phẩy/dấu chấm → gộp nhiều câu (nhiều nhân vật) thành đoạn 10+ giây.
+_SMALL_PUNCT = str.maketrans({"\ufe50": "，", "\ufe51": "、", "\ufe52": "。", "\ufe54": "；", "\ufe55": "：", "\ufe56": "？", "\ufe57": "！"})
+
+
+def normalize_punct(text):
+    return (text or "").translate(_SMALL_PUNCT)
+
 
 PAUSE_SPLIT_SEC = 0.45  # khoảng nghỉ giữa 2 từ >= ngưỡng này -> coi là ranh giới câu nói
 SOFT_PUNCT_RE = re.compile(r"[，,、：:]$")
@@ -700,7 +708,7 @@ def split_segment_by_sentences(seg, max_len_sec=7.0):
     cur = []
     for i, w in enumerate(words):
         cur.append(w)
-        wt = (w.word or "").strip()
+        wt = normalize_punct((w.word or "").strip())
         nxt = words[i + 1] if i + 1 < len(words) else None
         gap = (float(nxt.start) - float(w.end)) if nxt else 0.0
         cur_len = float(w.end) - float(cur[0].start)
@@ -713,7 +721,7 @@ def split_segment_by_sentences(seg, max_len_sec=7.0):
         groups.append(cur)
     pieces = []
     for grp in groups:
-        joined = "".join(x.word for x in grp).strip().strip(",，、")
+        joined = normalize_punct("".join(x.word for x in grp)).strip().strip(",，、")
         if not joined:
             continue
         pieces.append({"start": float(grp[0].start), "end": float(grp[-1].end), "text": joined})
@@ -727,7 +735,7 @@ def merge_and_clean_asr_segments(raw_segments, total_duration):
     """
     cleaned = []
     for s in raw_segments:
-        txt = (s.get("text") or "").strip()
+        txt = normalize_punct((s.get("text") or "")).strip()
         if not txt:
             continue
         start = max(0.0, float(s.get("start", 0.0)))

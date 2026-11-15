@@ -796,6 +796,24 @@ async function main() {
     return `"${String(det.desc || '').slice(0, 30)}" • ${urls.length} link phát`;
   });
 
+  console.log('\n--- [4a2] Chia câu & kiểm tra bản dịch tiếng Trung ---');
+  await check('Dấu câu cỡ nhỏ của Whisper (﹐ ﹒ ﹖ …) được quy về dấu chuẩn để chia câu (lỗi đoạn 13 giây gộp nhiều câu)', async () => {
+    if (!fs.existsSync(PY_CORE)) throw skip('Chưa cài môi trường Python lõi.', true);
+    const r = spawnSync(PY_CORE, ['-c', "import sys; sys.path.insert(0, 'src'); import local_ai_worker as w; print(w.normalize_punct('鸟都被你吓跑了﹐我听说﹒真的吗﹖好﹗'))"], { cwd: path.join(__dirname, '..'), encoding: 'utf8', env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
+    const out = (r.stdout || '').trim();
+    assert(out === '鸟都被你吓跑了，我听说。真的吗？好！', `kết quả: ${out} ${r.stderr}`);
+    return out;
+  });
+  await check('Kiểm tra bản dịch: câu gốc vốn lặp từ (鱼 鱼 鱼, 叫叫叫) thì bản dịch lặp là hợp lệ; câu gốc không lặp thì vẫn bắt lỗi', async () => {
+    const { inspectTranslation } = require('../src/ai/llm_translator')._internals;
+    const a = inspectTranslation('Cá, nhìn cá cá cá nhìn bạn', '鱼，你看鱼 鱼 鱼看你', 'vi');
+    const b = inspectTranslation('Sủa sủa sủa', '叫叫叫', 'vi');
+    const c = inspectTranslation('Tôi tôi tôi đi đây', '我走了', 'vi');
+    assert(!a.problem && !b.problem, `báo lỗi nhầm: ${a.problem || b.problem}`);
+    assert(c.problem && /lặp từ/.test(c.problem), 'phải bắt lỗi lặp từ khi câu gốc không lặp');
+    return 'nguồn lặp → chấp nhận • nguồn không lặp → báo lỗi';
+  });
+
   /* ---------------- 4b0. Qwen dùng chung (Windows: %USERPROFILE%\QwenLocal) ---------------- */
   console.log('\n--- [4b0] Qwen dùng chung cho mọi ứng dụng ---');
   await check('Chuyển bản Qwen cũ sang thư mục dùng chung an toàn (đổi chỗ cùng ổ; khác ổ: sao chép → kiểm → mới xóa bản cũ)', async () => {

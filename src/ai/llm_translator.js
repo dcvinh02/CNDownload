@@ -174,7 +174,11 @@ function inspectTranslation(raw, sourceText, targetLang) {
   if (targetLang === 'vi' && CJK_RE.test(t)) return { text: t, problem: `còn sót chữ Hán/Nhật/Hàn ("${t.slice(0, 30)}")` };
   if (/\((ghi chú|chú thích|note|giải thích)[^)]*\)/i.test(t)) return { text: t, problem: 'có ghi chú thừa trong ngoặc' };
   const words = t.toLowerCase().split(/\s+/);
-  for (let i = 0; i + 2 < words.length; i++) {
+  // Câu gốc vốn lặp (vd. "鱼，你看鱼 鱼 鱼看你", "叫叫叫", "no no no") → bản dịch lặp từ là đúng, không coi là lỗi
+  const srcCompact = String(sourceText || '').toLowerCase().replace(/[\s\p{P}]/gu, '');
+  const srcWords = String(sourceText || '').toLowerCase().split(/[\s\p{P}]+/u).filter(Boolean);
+  const sourceRepeats = /(.)\1\1/u.test(srcCompact) || srcWords.some((w, i) => w === srcWords[i + 1] && w === srcWords[i + 2]);
+  for (let i = 0; !sourceRepeats && i + 2 < words.length; i++) {
     if (words[i].length > 1 && words[i] === words[i + 1] && words[i] === words[i + 2]) {
       return { text: t, problem: `lặp từ bất thường ("${words[i]} ${words[i]} ${words[i]}")` };
     }
@@ -327,6 +331,12 @@ async function translateChunk(chunk, ctxBefore, ctxAfter, opts, stats, depth = 0
     const leftCtx = chunk.slice(0, mid).map((s, i) => ({ ...s, translated_text: left[i] }));
     const right = await translateChunk(chunk.slice(mid), leftCtx.slice(-3), ctxAfter, opts, stats, depth + 1);
     return [...left, ...right];
+  }
+  // Chỉ còn 1 câu mà model vẫn dịch lỗi chất lượng → để trống câu đó (báo cảnh báo để người dùng tự nhập),
+  // KHÔNG làm hỏng cả tác vụ hàng chục câu
+  if (chunk.length === 1 && lastProblems.length && !/thiếu|số lượng|ID|thứ tự|JSON/i.test(lastProblems.join(' '))) {
+    stats.problems.push(`Đoạn id=${chunk[0].id} chưa dịch được (${lastProblems.join(' ').slice(0, 160)}) — hãy nhập lời dịch.`);
+    return [''];
   }
   throw new AiProviderError(
     'INVALID_RESPONSE',

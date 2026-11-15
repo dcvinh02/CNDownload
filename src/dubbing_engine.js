@@ -2295,6 +2295,7 @@ async function extractAndPrepareSegments(videoPathOrOpts, targetLang = 'vi', cus
         ckpt.translationStats = translationStats;
       }
       if (tr.stats && Array.isArray(tr.stats.fallbacks) && tr.stats.fallbacks.length) log('warn', `Dịch: đã dùng dự phòng ${Array.from(new Set(tr.stats.fallbacks)).join(', ')}.`);
+      if (tr.stats && Array.isArray(tr.stats.problems)) tr.stats.problems.filter((p) => /chưa dịch được/.test(p)).forEach((p) => log('warn', p));
       log('ok', `Bước 3: ${translationMode}.`);
     }
 
