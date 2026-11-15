@@ -299,7 +299,18 @@ async function parseBilibili(urlInfo, options = {}) {
   if (options.cookie) headers.Cookie = options.cookie;
 
   const viewRes = await fetch(viewApi, { headers, signal: AbortSignal.timeout(10000) });
-  const viewJson = await viewRes.json();
+  const viewText = await viewRes.text();
+  if (viewRes.status === 412 || /^\s*</.test(viewText)) {
+    throw new Error(
+      `Bilibili tạm chặn yêu cầu từ mạng này (HTTP ${viewRes.status} — kiểm soát truy cập do gửi nhiều yêu cầu). Hãy chờ 5–15 phút rồi thử lại, hoặc dán Cookie đăng nhập Bilibili của bạn.`
+    );
+  }
+  let viewJson;
+  try {
+    viewJson = JSON.parse(viewText);
+  } catch (_) {
+    throw new Error(`Bilibili trả dữ liệu không hợp lệ (HTTP ${viewRes.status}).`);
+  }
 
   if (viewJson.code !== 0 || !viewJson.data) {
     throw new Error(`Bilibili API trả về lỗi: ${viewJson.message || 'Không xác định'}`);

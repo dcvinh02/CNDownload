@@ -142,12 +142,14 @@ const DUMP_JS = `(function() {
   const videoAnchors = Array.from(document.querySelectorAll('a[href*="/video/"], a[href*="/note/"], a[href*="/short-video/"], a[href*="/explore/"], a[href*="modal_id="]'));
   const allAnchors = Array.from(document.querySelectorAll('a[href]'));
   const seenHref = new Set(); const mergedLinks = [];
+  // Khung danh sách bài đăng CỦA CHỦ TRANG (không gồm video gợi ý/SEO/xu hướng ở các khung khác)
+  const OWNER_LIST_SEL = '[data-e2e="user-post-list"], #userPostedFeeds, .user-photo-list, [class*="user-photo-list"]';
   for (const a of [...videoAnchors, ...allAnchors]) {
     if (!a.href || seenHref.has(a.href)) continue;
     seenHref.add(a.href);
     const img = a.querySelector('img');
     const rawText = (a.innerText || a.getAttribute('title') || (img && img.getAttribute('alt')) || '').replace(/\\s+/g, ' ').trim();
-    mergedLinks.push({ href: a.href, text: rawText.slice(0, 200), cover: (img && (img.src || img.getAttribute('data-src'))) || '' });
+    mergedLinks.push({ href: a.href, text: rawText.slice(0, 200), cover: (img && (img.src || img.getAttribute('data-src'))) || '', inOwnerList: !!(a.closest && a.closest(OWNER_LIST_SEL)) });
     if (mergedLinks.length >= 260) break;
   }
   const hasLoginWall = videoAnchors.length === 0 && (href.includes('/login') || bodyText.includes('登录后即可查看') || bodyText.includes('请先登录') || bodyText.includes('扫码登录'));

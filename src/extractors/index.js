@@ -56,6 +56,26 @@ const {
 /**
  * Hàm phân tích (Scrape & Parse) tổng hợp cho cả 12 nền tảng
  */
+/**
+ * Video "giữ chỗ" mà trình phát nhúng tự phát khi bị chặn/lỗi (vd. Bilibili phát s1.hdslb.com/.../error.mp4 khi
+ * API trả 412) — không phải video thật, không được coi là luồng tải được.
+ */
+function isPlaceholderMedia(src = '') {
+  const u = String(src);
+  if (/^blob:/i.test(u) || /\/(?:error|loading|placeholder|default)[-_]?\w{0,8}\.mp4(?:[?#]|$)/i.test(u) || /hdslb\.com\/bfs\/static\/player\/media\//i.test(u)) return true;
+  let parsed;
+  try {
+    parsed = new URL(u);
+  } catch (_) {
+    return true;
+  }
+  // Link thống kê/quảng cáo (vd. WeTV h.trace.qq.com/bosskv?...) có thể chứa ".mp4" trong tham số nhưng không phải video
+  if (/(^|\.)(trace|beacon|log|logs|stat|stats|report|analytics|mcs)\./i.test(parsed.hostname) || /bosskv|beacon|\/report\b|\/log\b/i.test(parsed.pathname)) return true;
+  const l = u.toLowerCase();
+  const mediaPath = /\.(mp4|m3u8|flv|m4s|ts|mov|webm)$/i.test(parsed.pathname) || /\.(mp4|m3u8|flv)\b/i.test(parsed.pathname);
+  return !(mediaPath || l.includes('mime_type=video') || l.includes('aweme/v1/play') || (l.includes('xhscdn.com') && l.includes('stream')));
+}
+
 async function analyzeVideo(params = {}) {
   const {
     rawInput = '',
@@ -212,7 +232,7 @@ async function analyzeVideo(params = {}) {
           cookie: urlInfo.cookies
         });
         const videoEv = (sniffRes.events || []).find(
-          (e) => (e.type === 'video_dom' || e.type === 'resource_stream') && e.data?.src
+          (e) => (e.type === 'video_dom' || e.type === 'resource_stream') && e.data?.src && !isPlaceholderMedia(e.data.src)
         );
         if (videoEv && videoEv.data.src) {
           const htmlMeta = extractHtmlPageMetadata(
@@ -234,8 +254,8 @@ async function analyzeVideo(params = {}) {
             formats: [
               {
                 formatId: 'webkit-auto-stream',
-                quality: 'HD Direct Stream (Auto-Discovered)',
-                ext: 'mp4',
+                quality: /\.m3u8/i.test(videoEv.data.src) ? 'HD HLS Stream (Auto-Discovered)' : 'HD Direct Stream (Auto-Discovered)',
+                ext: /\.m3u8/i.test(videoEv.data.src) ? 'm3u8' : 'mp4',
                 url: videoEv.data.src,
                 hasAudio: true,
                 noWatermark: true,
@@ -527,7 +547,10 @@ async function startRealDownload(jobParams) {
         await pipeline(nodeReadable, fileStream, { signal: abortController.signal });
       } else {
         // Luồng M3U8 / DASH (.m4s) / Bilibili -> dùng yt-dlp + FFmpeg để ghép Video H.264 + Audio AAC
-        const urlToDownload = targetUrl || currentDirectUrl;
+        // Luồng HLS bắt trực tiếp từ trình phát (webkit-auto-stream): tải thẳng luồng đó. Tải lại theo link trang
+        // phụ thuộc trình trích xuất yt-dlp của nền tảng (vd. WeTV đang lỗi "Unable to extract next.js data").
+        const isSniffedHls = String(formatId || '').startsWith('webkit-') && /\.m3u8/i.test(currentDirectUrl || '');
+        const urlToDownload = isSniffedHls ? currentDirectUrl : targetUrl || currentDirectUrl;
         if (!urlToDownload) {
           throw new Error('Không tìm thấy luồng tải hợp lệ.');
         }
@@ -583,6 +606,7 @@ async function startRealDownload(jobParams) {
         }
 
         jobState.ext = 'mp4';
+        jobState.outputDurationSec = Number(normRes.duration) || 0;
         jobState.vcodec = normRes.vcodec;
         jobState.acodec = normRes.acodec;
         jobState.hasAudio = normRes.hasAudio;
@@ -646,6 +670,7 @@ async function startRealDownload(jobParams) {
         jobState.outputPath = convJob.outputPath;
         jobState.fileName = path.basename(convJob.outputPath);
         jobState.ext = desiredFmt;
+        jobState.outputDurationSec = Number(verifyTarget.duration) || 0;
         jobState.vcodec = verifyTarget.vcodec;
         jobState.acodec = verifyTarget.acodec;
         jobState.hasAudio = verifyTarget.hasAudio;
@@ -658,6 +683,14 @@ async function startRealDownload(jobParams) {
       jobState.progress = 100;
       jobState.status = 'completed';
       jobState.speedText = `Hoàn tất • ${jobState.audioStatusText || 'Đã xác minh media'}`;
+      // Nền tảng chỉ cho tải đoạn xem thử (vd. MangoTV/iQIYI nội dung VIP phát 5 phút đầu): báo rõ, không im lặng
+      const expectedDur = Number(metadata?.data?.duration) || 0;
+      const gotDur = Number(jobState.outputDurationSec) || 0;
+      if (expectedDur >= 60 && gotDur > 0 && gotDur < expectedDur * 0.9) {
+        const fmt = (x) => `${Math.floor(x / 60)}:${String(Math.round(x % 60)).padStart(2, '0')}`;
+        jobState.partialWarning = `Chỉ tải được ${fmt(gotDur)} / ${fmt(expectedDur)} — nền tảng chỉ cho phát đoạn xem thử (thường là nội dung VIP). Cần Cookie tài khoản có quyền xem đầy đủ.`;
+        jobState.speedText = `Hoàn tất (MỘT PHẦN) • ${jobState.partialWarning}`;
+      }
       jobState.completedAt = new Date().toISOString();
 
       // Cập nhật file metadata.json phản ánh chính xác kết quả file cuối cùng (đã loại bỏ mọi cookie/token nhạy cảm)

@@ -796,6 +796,56 @@ async function main() {
     return `"${String(det.desc || '').slice(0, 30)}" • ${urls.length} link phát`;
   });
 
+  /* ---------------- 4b2. Quét trang cá nhân: chỉ video của chủ trang ---------------- */
+  console.log('\n--- [4b2] Quét trang cá nhân (mạng thật) ---');
+  const waitScan = async (sc, id) => {
+    for (let i = 0; i < 120; i++) {
+      const st = sc.getAccountScanStatus(id);
+      if (st && st.status !== 'scanning') return st;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    throw new Error('quét quá 120 s');
+  };
+  await check('Quét tài khoản mới KHÔNG dùng lại phiên/video của tài khoản quét trước (lỗi hiện video tài khoản khác)', async () => {
+    const sc = require('../src/account_scanner');
+    const a = await sc.startAccountScanJob({ rawInput: 'https://space.bilibili.com/546195', refresh: false });
+    const sa = await waitScan(sc, a.scanId);
+    const b = await sc.startAccountScanJob({ rawInput: 'https://space.bilibili.com/163637592', refresh: false, existingScanId: a.scanId });
+    const sb = await waitScan(sc, b.scanId);
+    if (!sa.account.profileIdentified && !sb.account.profileIdentified) throw skip('Không lấy được hồ sơ Bilibili (mạng/giới hạn truy cập).', true);
+    assert(b.scanId !== a.scanId, 'tài khoản B vẫn dùng lại phiên quét của tài khoản A');
+    assert(sb.account.accountName !== sa.account.accountName, `B hiển thị tên của A: ${sb.account.accountName}`);
+    const c = await sc.startAccountScanJob({ rawInput: sb.profileUrl, refresh: false, existingScanId: b.scanId });
+    await waitScan(sc, c.scanId);
+    assert(c.scanId === b.scanId, '"Quét tiếp" cùng tài khoản phải dùng lại phiên cũ');
+    return `A="${sa.account.accountName}" → B="${sb.account.accountName}" (phiên mới) • quét tiếp B dùng lại phiên B`;
+  });
+  await check('Douyin: trang cá nhân không trả video gợi ý/SEO của tài khoản khác', async () => {
+    const sc = require('../src/account_scanner');
+    const owner = 'MS4wLjABAAAAxvr2V5hydvkSMvOGtuFxkJ1rjuGv-lXBI9aw62FypvYUBnuFDt50_hfxUm_3h9vq';
+    const r = await sc.startAccountScanJob({ rawInput: `https://www.douyin.com/user/${owner}`, refresh: true });
+    const st = await waitScan(sc, r.scanId);
+    const logText = (st.logs || []).map((l) => l.msg).join(' | ');
+    const skipped = Number((logText.match(/đã loại (\d+) video gợi ý/) || [])[1] || 0);
+    if (st.videos.length === 0 && skipped === 0) throw skip(`Douyin không trả trang hồ sơ cho máy này: ${st.statusText}`, true);
+    // Mọi video còn lại phải xác minh được tác giả là chủ trang (đọc aweme_detail thật qua trình phát công khai)
+    const { runWebKitSniffer, DESKTOP_UA } = require('../src/extractors/custom_parsers');
+    for (const v of st.videos.slice(0, 3)) {
+      const sr = await runWebKitSniffer(`https://open.douyin.com/player/video?vid=${v.videoId}&autoplay=1`, DESKTOP_UA, 8500, {});
+      let sec = '';
+      for (const e of sr.events || []) {
+        try {
+          const j = JSON.parse((e.data && e.data.body) || '{}');
+          if (j.aweme_detail) sec = j.aweme_detail.author && j.aweme_detail.author.sec_uid;
+        } catch (_) {}
+      }
+      assert(!sec || sec === owner, `video ${v.videoId} thuộc tài khoản khác (${sec})`);
+    }
+    return st.videos.length
+      ? `${st.videos.length} video, đã xác minh tác giả ${Math.min(3, st.videos.length)} video • loại ${skipped} video gợi ý`
+      : `0 video lạ hiển thị (đã loại ${skipped} video gợi ý); báo: ${String(st.statusText).slice(0, 90)}`;
+  });
+
   /* ---------------- 4c. Giao diện: danh sách tải không bị treo khi tác vụ hoàn tất ---------------- */
   console.log('\n--- [4c] Giao diện (chạy public/app.js thật trong DOM giả lập) ---');
   await check('Danh sách tải chuyển sang "✅ Hoàn tất" khi tác vụ xong (lỗi thanh tiến độ treo ở 98%)', async () => {

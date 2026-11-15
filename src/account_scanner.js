@@ -463,11 +463,27 @@ function detectAccountPlatformAndId(rawInput, platformOverride = 'auto') {
 }
 
 /**
- * Bóc tách dữ liệu hồ sơ Douyin / Kuaishou / Xiaohongshu từ kết quả WebKitSniffer & RENDER_DATA
+ * Mã định danh chủ trang lấy từ URL hồ sơ — dùng để CHỈ giữ video do chính tài khoản này đăng.
+ * Douyin: sec_uid (MS4wLjAB...), Kuaishou: eid (3x...), Xiaohongshu: userId 24 ký tự hex.
  */
-function parseWebKitSnifferProfileAndVideos(platformId, sniffRes, fallbackAccountId = '') {
+function profileOwnerIdFromUrl(platformId, profileUrl = '') {
+  const u = String(profileUrl || '');
+  if (platformId === 'douyin') return (u.match(/\/user\/(MS4wLjAB[a-zA-Z0-9_-]+)/) || [])[1] || '';
+  if (platformId === 'kuaishou') return (u.match(/\/profile\/([a-zA-Z0-9_-]+)/) || [])[1] || '';
+  if (platformId === 'xiaohongshu') return (u.match(/\/user\/profile\/([a-f0-9]{24})/i) || [])[1] || '';
+  return '';
+}
+
+/**
+ * Bóc tách dữ liệu hồ sơ Douyin / Kuaishou / Xiaohongshu từ kết quả WebKitSniffer & RENDER_DATA.
+ * Trang hồ sơ còn chứa video GỢI Ý / xu hướng / link SEO của tài khoản khác (và trang "喜欢" là video người khác),
+ * nên chỉ nhận video khi xác minh được tác giả là chủ trang (ownerId), hoặc nằm trong khung danh sách bài đăng của chủ trang.
+ */
+function parseWebKitSnifferProfileAndVideos(platformId, sniffRes, fallbackAccountId = '', ownerId = '') {
   const items = [];
   const errors = [];
+  let skippedForeign = 0;
+  let hiddenOwnNotes = 0;
   let nickname = '';
   let uniqueId = fallbackAccountId || '';
   let avatar = '';
@@ -495,7 +511,7 @@ function parseWebKitSnifferProfileAndVideos(platformId, sniffRes, fallbackAccoun
       .trim();
     if (
       cleanTitle &&
-      cleanTitle !== '抖音' &&
+      !['抖音', '快手', '小红书', 'rednote', 'Xiaohongshu', 'Kuaishou', 'Douyin'].includes(cleanTitle) &&
       !cleanTitle.includes('抖音-记录美好生活') &&
       !cleanTitle.includes('验证码')
     ) {
@@ -505,6 +521,8 @@ function parseWebKitSnifferProfileAndVideos(platformId, sniffRes, fallbackAccoun
 
   // Phân tích dữ liệu đã cấu trúc sẵn hoặc RENDER_DATA của Douyin
   const applyRenderUserAndPosts = (u, postList) => {
+    const uSec = u && typeof u === 'object' ? u.secUid || u.sec_uid || '' : '';
+    if (ownerId && uSec && uSec !== ownerId) u = null; // hồ sơ của người khác (vd. tài khoản đang đăng nhập)
     if (u && typeof u === 'object' && (u.nickname || u.uid || u.secUid || u.sec_uid)) {
       if (u.nickname && !nickname) nickname = u.nickname;
       if (u.uniqueId || u.unique_id || u.shortId || u.short_id || u.uid) {
@@ -532,6 +550,11 @@ function parseWebKitSnifferProfileAndVideos(platformId, sniffRes, fallbackAccoun
       for (const aw of postList) {
         const vid = aw.awemeId || aw.aweme_id;
         if (!vid) continue;
+        const aSec = aw.authorInfo?.secUid || aw.author?.secUid || aw.author?.sec_uid || '';
+        if (ownerId && aSec && aSec !== ownerId) {
+          skippedForeign++;
+          continue;
+        }
         const cTime = aw.createTime ?? aw.create_time;
         items.push({
           videoId: String(vid),
@@ -568,9 +591,11 @@ function parseWebKitSnifferProfileAndVideos(platformId, sniffRes, fallbackAccoun
     try {
       if ((ev.type === 'xhr' || ev.type === 'fetch') && ev.data?.body) {
         const body = JSON.parse(ev.data.body);
+        const evUrl = String(ev.data.url || '');
 
-        // Douyin user/profile/other
-        const uObj = body.user || body.user_info;
+        // Douyin user/profile/other — bỏ qua hồ sơ không phải chủ trang (vd. hồ sơ của chính người dùng đang đăng nhập)
+        let uObj = body.user || body.user_info;
+        if (uObj && typeof uObj === 'object' && ownerId && uObj.sec_uid && uObj.sec_uid !== ownerId) uObj = null;
         if (uObj && typeof uObj === 'object') {
           if (uObj.nickname && !nickname) nickname = uObj.nickname;
           if (uObj.unique_id || uObj.short_id || uObj.uid) uniqueId = String(uObj.unique_id || uObj.short_id || uObj.uid);
@@ -586,12 +611,21 @@ function parseWebKitSnifferProfileAndVideos(platformId, sniffRes, fallbackAccoun
           }
         }
 
-        // Douyin aweme_list
+        // Douyin aweme_list — CHỈ danh sách "作品" của chủ trang (/aweme/post/). Các danh sách khác trên trang
+        // (đề xuất /tab/feed/, "喜欢" /aweme/favorite/, tìm kiếm liên quan...) là video của tài khoản khác.
         if (Array.isArray(body.aweme_list)) {
-          if (body.has_more === 1 || body.has_more === true) hasMore = true;
+          const isOwnerPostApi = /\/aweme\/v\d+\/web\/aweme\/post\//.test(evUrl) ||
+            (/\/aweme\/post\//.test(evUrl) && !/favorite|collect|feed|search|related/.test(evUrl));
+          if (isOwnerPostApi && (body.has_more === 1 || body.has_more === true)) hasMore = true;
           for (const aw of body.aweme_list) {
             const vid = aw.aweme_id;
             if (!vid) continue;
+            const aSec = aw.author?.sec_uid || '';
+            const ownedByTarget = ownerId ? (aSec ? aSec === ownerId : isOwnerPostApi) : isOwnerPostApi;
+            if (!ownedByTarget) {
+              skippedForeign++;
+              continue;
+            }
             if (aw.author?.nickname && !nickname) nickname = aw.author.nickname;
             if (aw.author?.avatar_thumb?.url_list?.[0] && !avatar) {
               avatar = aw.author.avatar_thumb.url_list[0];
@@ -629,6 +663,10 @@ function parseWebKitSnifferProfileAndVideos(platformId, sniffRes, fallbackAccoun
           for (const f of ksFeeds) {
             const pid = f?.photo?.id;
             if (!pid) continue;
+            if (ownerId && f?.author?.id && /^3x/i.test(String(f.author.id)) && String(f.author.id) !== ownerId) {
+              skippedForeign++;
+              continue;
+            }
             if (f?.author?.name && !nickname) nickname = f.author.name;
             if (f?.author?.headerUrl && !avatar) avatar = f.author.headerUrl;
             items.push({
@@ -654,6 +692,36 @@ function parseWebKitSnifferProfileAndVideos(platformId, sniffRes, fallbackAccoun
           if (xhsUser.redId) uniqueId = String(xhsUser.redId);
           if (xhsUser.desc) signature = xhsUser.desc;
         }
+        // Bài đăng của chủ trang: user.notes[0] (tab "笔记"); chỉ nhận bài có userId trùng chủ trang và là video
+        const xhsNotes = initState?.user?.notes;
+        const postedTab = Array.isArray(xhsNotes) && Array.isArray(xhsNotes[0]) ? xhsNotes[0] : [];
+        for (const n of postedTab) {
+          const card = n?.noteCard || {};
+          const nUid = card.user?.userId || '';
+          if (ownerId && nUid && nUid !== ownerId) {
+            skippedForeign++;
+            continue;
+          }
+          if (card.type && card.type !== 'video') continue; // ghi chú ảnh, không phải video
+          const nid = n.id || card.noteId || '';
+          if (!nid) {
+            hiddenOwnNotes++;
+            continue;
+          }
+          const tok = n.xsecToken || card.xsecToken || '';
+          items.push({
+            videoId: String(nid),
+            title: card.displayTitle || `Xiaohongshu ${nid}`,
+            url: `https://www.xiaohongshu.com/explore/${nid}${tok ? `?xsec_token=${encodeURIComponent(tok)}&xsec_source=pc_user` : ''}`,
+            cover: card.cover?.urlDefault || card.cover?.url || '',
+            duration: 0,
+            publishedAt: '',
+            views: 0,
+            author: card.user?.nickname || card.user?.nickName || nickname || 'Xiaohongshu Creator',
+            downloadable: true,
+            statusNote: 'Sẵn sàng tải'
+          });
+        }
       }
     } catch (_) {}
   }
@@ -665,6 +733,11 @@ function parseWebKitSnifferProfileAndVideos(platformId, sniffRes, fallbackAccoun
       const href = lnk.href || '';
       const vid = extractVideoId(platformId, href);
       if (!vid) continue;
+      const urlNamesOwner = Boolean(ownerId) && platformId === 'xiaohongshu' && href.includes(`/user/profile/${ownerId}/`);
+      if (!lnk.inOwnerList && !urlNamesOwner) {
+        skippedForeign++;
+        continue;
+      }
 
       let canonical = href;
       if (platformId === 'douyin') canonical = `https://www.douyin.com/video/${vid}`;
@@ -692,6 +765,11 @@ function parseWebKitSnifferProfileAndVideos(platformId, sniffRes, fallbackAccoun
   const profileIdentified = Boolean(
     nickname || avatar || followerCount !== null || videoCount !== null || items.length > 0
   );
+  if (hiddenOwnNotes > 0 && items.length === 0) {
+    errors.push(
+      `Xiaohongshu ẩn mã bài viết khi chưa đăng nhập (thấy ${hiddenOwnNotes} bài của tài khoản này nhưng không có link). Hãy dán Cookie đăng nhập Xiaohongshu của bạn rồi quét lại.`
+    );
+  }
 
   return {
     profileIdentified,
@@ -705,7 +783,8 @@ function parseWebKitSnifferProfileAndVideos(platformId, sniffRes, fallbackAccoun
     hasLoginWall,
     hasMore,
     items,
-    errors
+    errors,
+    skippedForeign
   };
 }
 
@@ -904,7 +983,12 @@ async function previewAccountTarget({
         scrollCount: 0
       });
 
-      const prof = parseWebKitSnifferProfileAndVideos(parsed.platformId, sniffRes, accountId || '');
+      const prof = parseWebKitSnifferProfileAndVideos(
+        parsed.platformId,
+        sniffRes,
+        accountId || '',
+        profileOwnerIdFromUrl(parsed.platformId, resolvedProfileUrl)
+      );
       if (prof.nickname) accountName = prof.nickname;
       if (prof.uniqueId) accountId = prof.uniqueId;
       if (prof.avatar) avatar = prof.avatar;
@@ -1221,7 +1305,13 @@ async function fetchWebKitProfilePage({
     onProc
   });
 
-  const parsed = parseWebKitSnifferProfileAndVideos(platformId, sniffRes, accountId);
+  const parsed = parseWebKitSnifferProfileAndVideos(platformId, sniffRes, accountId, profileOwnerIdFromUrl(platformId, profileUrl));
+  if (parsed.items.length === 0 && parsed.skippedForeign > 0 && !parsed.hasCaptcha) {
+    parsed.errors.push(
+      `Chưa lấy được danh sách video của chủ trang (đã loại ${parsed.skippedForeign} video gợi ý của tài khoản khác).` +
+        (domainSafeCookie ? ' Cookie có thể đã hết hạn — đăng nhập lại trên trình duyệt và xuất Cookie mới.' : ' Hãy dán Cookie đăng nhập của bạn rồi quét lại.')
+    );
+  }
   if (sniffRes.unsupportedReason && parsed.items.length === 0) {
     parsed.errors.push(sniffRes.unsupportedReason);
   }
@@ -1240,6 +1330,7 @@ async function fetchWebKitProfilePage({
 
   return {
     items: parsed.items,
+    skippedForeign: parsed.skippedForeign,
     hasMore: parsed.hasMore,
     accountName: parsed.nickname,
     uniqueId: parsed.uniqueId,
@@ -1311,11 +1402,16 @@ async function startAccountScanJob({
       ? cookieValidation.cookieHeader
       : '';
 
+  // Chỉ "quét tiếp" phiên cũ khi đúng CÙNG nền tảng + CÙNG tài khoản. Trước đây nhập tài khoản mới rồi bấm Quét
+  // vẫn dùng lại phiên cũ → hiện video của tài khoản trước đó.
+  const targetKey = `${preview.platformId}:${String(preview.accountId || preview.profileUrl || '').trim().toLowerCase()}`;
   let scanJob = existingScanId && !refresh ? activeScanJobs.get(existingScanId) : null;
+  if (scanJob && scanJob.targetKey !== targetKey) scanJob = null;
   if (!scanJob) {
     const scanId = `scan_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     scanJob = {
       scanId,
+      targetKey,
       platformId: preview.platformId,
       platformName: preview.platformName,
       account: preview.account,
@@ -1436,7 +1532,9 @@ async function startAccountScanJob({
         }
         if (scanJob.platformId !== 'bilibili') {
           log(
-            `WebKit: ${(pageRes.items || []).length} video • hồ sơ ${pageRes.profileIdentified ? 'đã nhận diện' : 'chưa nhận diện'}` +
+            `WebKit: ${(pageRes.items || []).length} video của chủ trang` +
+              `${pageRes.skippedForeign ? ` (đã loại ${pageRes.skippedForeign} video gợi ý của tài khoản khác)` : ''}` +
+              ` • hồ sơ ${pageRes.profileIdentified ? 'đã nhận diện' : 'chưa nhận diện'}` +
               `${pageRes.hasCaptcha ? ' • GẶP CAPTCHA' : ''}${pageRes.hasLoginWall ? ' • yêu cầu đăng nhập' : ''}` +
               `${(pageRes.errors || []).length ? ` • lỗi: ${(pageRes.errors || []).join(' | ')}` : ''}`
           );

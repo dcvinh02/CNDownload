@@ -406,6 +406,12 @@ function transformUrlByMethod(urlStr, platformCfg, method = 'auto') {
   }
 
   const videoId = extractVideoId(platformCfg.id, urlStr);
+  // iq.com (iQIYI quốc tế) dùng mã/đường dẫn khác hẳn iqiyi.com — không được ghép mã iq.com vào mẫu link iqiyi.com
+  let isIqIntl = false;
+  try {
+    isIqIntl = platformCfg.id === 'iqiyi' && /(^|\.)iq\.com$/i.test(new URL(urlStr).hostname);
+  } catch (_) {}
+  const useTemplates = !isIqIntl;
   let cleanUrlStr = urlStr;
   let utmUrlStr = urlStr;
 
@@ -413,7 +419,7 @@ function transformUrlByMethod(urlStr, platformCfg, method = 'auto') {
     const parsed = new URL(urlStr);
 
     // 1. Tạo Clean Canonical Link
-    if (videoId && platformCfg.canonicalTemplate) {
+    if (useTemplates && videoId && platformCfg.canonicalTemplate) {
       cleanUrlStr = platformCfg.canonicalTemplate(videoId);
     } else {
       const cUrl = new URL(parsed.origin + parsed.pathname);
@@ -435,8 +441,8 @@ function transformUrlByMethod(urlStr, platformCfg, method = 'auto') {
     utmUrlStr = uUrl.toString();
   } catch {}
 
-  const embedUrl = videoId && platformCfg.embedTemplate ? platformCfg.embedTemplate(videoId) : null;
-  const mobileUrl = videoId && platformCfg.mobileShareTemplate ? platformCfg.mobileShareTemplate(videoId) : utmUrlStr;
+  const embedUrl = useTemplates && videoId && platformCfg.embedTemplate ? platformCfg.embedTemplate(videoId) : null;
+  const mobileUrl = useTemplates && videoId && platformCfg.mobileShareTemplate ? platformCfg.mobileShareTemplate(videoId) : utmUrlStr;
 
   if (method === 'link') {
     return {

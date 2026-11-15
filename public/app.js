@@ -739,6 +739,7 @@ async function loadDownloads() {
             <div class="dl-sub">
               ${isRunning ? `🔄 Đang xử lý (${j.progress || 0}% • ${escapeHtml(j.speedText || '')}) — Lưu tại: ${escapeHtml(j.saveDir || '')}` : ''}
               ${isDone ? `✅ Hoàn tất (${fmtSizeMB(j.totalBytes)} MB • ${escapeHtml(j.audioStatusText || 'Đã xác minh')}) — 📁 ${escapeHtml(j.outputPath || '')}` : ''}
+              ${isDone && j.partialWarning ? `<br><span style="color:var(--warn, #d97706);">⚠️ ${escapeHtml(j.partialWarning)}</span>` : ''}
               ${isCancelled ? `🛑 ${escapeHtml(j.error || j.speedText || 'Đã dừng / hủy tải theo yêu cầu')}` : ''}
               ${isFailed ? `❌ Lỗi: ${escapeHtml(j.error || 'Không xác định')}` : ''}
             </div>
@@ -1055,8 +1056,10 @@ async function startAccountScan(refresh = false) {
     const data = await res.json();
     if (!data.success) throw new Error(data.error || 'Không thể quét tài khoản');
 
+    const prevScanId = currentAccountScan?.scanId || null;
     currentAccountScan = data.scan;
-    if (refresh) selectedAccountVideoKeys.clear();
+    // Phiên quét mới (tài khoản khác hoặc Làm mới) → bỏ lựa chọn video của tài khoản trước
+    if (refresh || currentAccountScan?.scanId !== prevScanId) selectedAccountVideoKeys.clear();
     renderAccountScanStatus(currentAccountScan);
     renderAccountVideos();
     toast('🚀 Đang mở trình duyệt nền & quét hồ sơ tài khoản...');
