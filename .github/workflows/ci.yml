@@ -32,6 +32,7 @@ jobs:
             bin/models
             bin/tools/python
             ~/QwenLocal
+            QwenLocal
           key: ai-${{ runner.os }}-${{ hashFiles('requirements/*.txt', 'src/tool_installer.js', 'src/python_env.js', 'src/qwen_shared_home.js') }}
 
       # Windows: cài cả AI dịch Local Qwen3.5 9B (llama.cpp, chạy CPU trên máy CI) — giống máy người dùng
@@ -72,20 +73,26 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $home2 = Join-Path $env:USERPROFILE 'QwenLocal'
-          $mf = Join-Path $home2 'qwen-local.json'
+          $mf = Join-Path $env:USERPROFILE 'QwenLocal\qwen-local.json'
           if (-not (Test-Path $mf)) { throw "Không có $mf" }
           $m = Get-Content $mf -Raw -Encoding UTF8 | ConvertFrom-Json
+          $home2 = $m.home
+          $free = [math]::Round((Get-PSDrive C).Free / 1GB, 1)
+          Write-Host "Ổ C còn $free GB • Qwen nằm ở: $home2" 
           $exe = Join-Path $home2 $m.runtime.server
           $gguf = Join-Path $home2 $m.model.file
           if (-not (Test-Path $exe)) { throw "Thiếu bộ chạy $exe" }
           if ((Get-Item $gguf).Length -ne $m.model.sizeBytes) { throw "Model sai kích thước: $gguf" }
           if (-not (Test-Path (Join-Path $home2 'Start_Qwen_Server.bat'))) { throw 'Thiếu Start_Qwen_Server.bat' }
-          $lnk = Join-Path $PWD 'Qwen Local.lnk'
-          if (-not (Test-Path $lnk)) { throw 'Thiếu lối tắt Qwen Local.lnk trong thư mục ứng dụng' }
-          $t = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk).TargetPath
-          if ($t -ne $home2) { throw "Lối tắt trỏ sai: $t" }
-          Write-Host "OK: manifest + model + bộ chạy + lối tắt → $t"
+          if ($home2.StartsWith($PWD.Path)) {
+            Write-Host "OK: Qwen nằm trong thư mục ứng dụng ($home2) — không cần lối tắt"
+          } else {
+            $lnk = Join-Path $PWD 'Qwen Local.lnk'
+            if (-not (Test-Path $lnk)) { throw 'Thiếu lối tắt Qwen Local.lnk trong thư mục ứng dụng' }
+            $t = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk).TargetPath
+            if ($t -ne $home2) { throw "Lối tắt trỏ sai: $t" }
+            Write-Host "OK: manifest + model + bộ chạy + lối tắt → $t"
+          }
           $p = Start-Process -FilePath cmd.exe -ArgumentList '/c', (Join-Path $home2 'Start_Qwen_Server.bat'), '8799' -PassThru -WindowStyle Hidden
           $ready = $false
           for ($i = 0; $i -lt 150; $i++) { Start-Sleep -Seconds 2; try { if ((Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8799/health).StatusCode -eq 200) { $ready = $true; break } } catch {} }

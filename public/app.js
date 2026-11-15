@@ -3022,7 +3022,7 @@ function renderToolInstallerList(tools) {
     .join('');
 }
 
-async function installTool(toolId, isReinstall = false) {
+async function installTool(toolId, isReinstall = false, qwenLocation = null) {
   const confirmCheck = document.getElementById(`toolConfirm_${toolId}`);
   if (!isReinstall && confirmCheck && !confirmCheck.checked) {
     toast('Vui lòng tích vào ô xác nhận đồng ý tải trước khi nhấn cài đặt!', 'warn');
@@ -3041,9 +3041,27 @@ async function installTool(toolId, isReinstall = false) {
     const res = await fetch('/api/tools/install', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ toolId, userConfirmed: true })
+      body: JSON.stringify({ toolId, userConfirmed: true, ...(qwenLocation ? { qwenLocation } : {}) })
     });
     const data = await res.json();
+    if (!data.success && data.code === 'QWEN_LOCATION_REQUIRED' && data.details) {
+      // Ổ chứa thư mục người dùng (thường là C) ít chỗ → hỏi nơi cài Qwen
+      const d = data.details;
+      const gb = (b) => (typeof b === 'number' ? (b / 1e9).toFixed(1) : '?');
+      const useApp = window.confirm(
+        `Ổ ${d.userDrive} chỉ còn ${gb(d.userFree)} GB trống, AI dịch Local Qwen cần khoảng 6 GB.\n\n` +
+          `• Bấm OK: cài vào thư mục ứng dụng\n   ${d.appHome}\n   (ổ ${d.appDrive}, còn ${gb(d.appFree)} GB)\n\n` +
+          `• Bấm Hủy: chọn cài vào ổ ${d.userDrive} (thư mục dùng chung ${d.userHome})\n\n` +
+          `Dù cài ở đâu, ứng dụng khác vẫn tìm được Qwen qua ${d.userHome}\\qwen-local.json.`
+      );
+      if (useApp) return installTool(toolId, true, 'app');
+      const useUser = window.confirm(
+        `Cài Qwen vào ổ ${d.userDrive} (${d.userHome})?${d.userTooSmall ? `\n\n⚠️ Ổ ${d.userDrive} có thể KHÔNG ĐỦ CHỖ (còn ${gb(d.userFree)} GB).` : ''}`
+      );
+      if (useUser) return installTool(toolId, true, 'user');
+      if (progStep) progStep.textContent = 'Đã hủy cài đặt (chưa chọn nơi cài).';
+      return;
+    }
     if (!data.success) throw new Error(data.error);
 
     toast(`📦 Bắt đầu tải ${toolId}... Bạn có thể theo dõi tiến độ trực tiếp.`);

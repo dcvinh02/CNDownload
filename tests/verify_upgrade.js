@@ -815,22 +815,61 @@ async function main() {
     assert(fs.readFileSync(path.join(d, 'home', 'llama.cpp', 'b1', 'llama-server.exe'), 'utf8') === 'bin', 'thư mục bộ chạy chuyển sai');
     return 'đổi chỗ + sao chép file 3 MB + sao chép thư mục: đủ dữ liệu, bản cũ đã dọn';
   });
-  await check('Windows: Qwen nằm ở %USERPROFILE%\\QwenLocal có qwen-local.json hợp lệ + Start_Qwen_Server.bat + lối tắt trong thư mục app', async () => {
+  await check('Chọn nơi cài Qwen theo dung lượng: ổ C đủ chỗ → không hỏi; ổ C ít chỗ & app ở ổ khác → hỏi, đề xuất thư mục app', async () => {
+    const { decideLocation } = require('../src/qwen_shared_home');
+    const GB = 1e9;
+    const a = decideLocation({ userFree: 80 * GB, appFree: 200 * GB, sameDrive: false });
+    const b = decideLocation({ userFree: 12 * GB, appFree: 200 * GB, sameDrive: false });
+    const c = decideLocation({ userFree: 12 * GB, appFree: 200 * GB, sameDrive: true });
+    const d = decideLocation({ userFree: 5 * GB, appFree: 3 * GB, sameDrive: false });
+    assert(!a.ask && a.choice === 'user', `C còn 80 GB: ${JSON.stringify(a)}`);
+    assert(b.ask && b.recommended === 'app', `C còn 12 GB: ${JSON.stringify(b)}`);
+    assert(!c.ask, `cùng ổ thì không hỏi: ${JSON.stringify(c)}`);
+    assert(d.ask && d.userTooSmall && d.recommended === 'user', `cả hai ổ thiếu: ${JSON.stringify(d)}`);
+    return 'C 80 GB → không hỏi • C 12 GB (app ở ổ khác) → hỏi, đề xuất app • cùng ổ → không hỏi • cả hai thiếu → hỏi, cảnh báo';
+  });
+  await check('Windows: ổ C ít chỗ (giả lập) → bắt buộc hỏi nơi cài; chọn thư mục app → %USERPROFILE%\\QwenLocal\\qwen-local.json trỏ đúng chỗ', async () => {
+    if (process.platform !== 'win32') throw skip('Chỉ áp dụng Windows.');
+    const fakeUser = path.join(TMP, 'fake_user_profile');
+    fs.mkdirSync(fakeUser, { recursive: true });
+    const code = `
+      const qh = require('./src/qwen_shared_home'); const ll = require('./src/local_llm_service'); const ti = require('./src/tool_installer');
+      const a = qh.assessLocation(); let err = null;
+      if (a.ask) { try { ti.startToolInstallJob({ toolId: 'localLlmQwen', userConfirmed: true }); } catch (e) { err = e.code; } }
+      const target = qh.chooseLocation('app');
+      const ptr = JSON.parse(require('fs').readFileSync(require('path').join(ll.QWEN_DEFAULT_HOME, 'qwen-local.json'), 'utf8'));
+      console.log(JSON.stringify({ ask: a.ask, userLow: a.userLow, err, target, home: ll.QWEN_HOME, ptrHome: ptr.home, def: ll.QWEN_DEFAULT_HOME, serverBin: ll.LLAMA_CPP.serverBin }));`;
+    const r = spawnSync(process.execPath, ['-e', code], {
+      cwd: path.join(__dirname, '..'),
+      env: { ...process.env, USERPROFILE: fakeUser, QWEN_TEST_USER_FREE_BYTES: String(4e9), CN_SKIP_QWEN_HOME: '1', QWEN_LOCAL_HOME: '' },
+      encoding: 'utf8',
+      timeout: 60000
+    });
+    const out = JSON.parse((r.stdout || '').trim().split('\n').pop() || '{}');
+    assert(out.userLow, `phải nhận ra ổ C ít chỗ: ${r.stdout} ${r.stderr}`);
+    if (out.ask) assert(out.err === 'QWEN_LOCATION_REQUIRED', `cài khi chưa chọn nơi phải bị chặn để hỏi: ${out.err}`);
+    assert(out.def.toLowerCase().startsWith(fakeUser.toLowerCase()), `thư mục user giả lập: ${out.def}`);
+    assert(out.home === out.target && out.ptrHome === out.target && out.target.endsWith('QwenLocal') && !out.target.toLowerCase().startsWith(fakeUser.toLowerCase()), `trỏ sai: ${JSON.stringify(out)}`);
+    assert(out.serverBin.startsWith(out.target), `bộ chạy phải nằm trong ${out.target}`);
+    return `${out.ask ? 'đã hỏi (QWEN_LOCATION_REQUIRED)' : 'Qwen đã có sẵn nên không hỏi'} • chọn app → ${out.target} • file trỏ ở ${out.def}`;
+  });
+  await check('Windows: qwen-local.json ở %USERPROFILE%\\QwenLocal trỏ tới Qwen đã cài (model + bộ chạy + Start_Qwen_Server.bat) + lối tắt/thư mục trong app', async () => {
     if (process.platform !== 'win32') throw skip('Chỉ áp dụng Windows (macOS dùng MLX trong thư mục ứng dụng).');
     const localLlm = require('../src/local_llm_service');
     const qh = require('../src/qwen_shared_home');
     if (!localLlm.isModelInstalled(localLlm.LOCAL_LLM_MODELS[0].id)) throw skip('Chưa cài AI Local Qwen.', true);
     const r = await qh.ensureSharedHome();
     assert(r.ok, `ensureSharedHome: ${r.error || ''}`);
-    const mf = JSON.parse(fs.readFileSync(localLlm.QWEN_MANIFEST, 'utf8'));
-    const home = path.dirname(localLlm.QWEN_MANIFEST);
-    assert(home.toLowerCase() === path.join(os.homedir(), 'QwenLocal').toLowerCase(), `thư mục: ${home}`);
+    const ptrFile = path.join(os.homedir(), 'QwenLocal', 'qwen-local.json');
+    const mf = JSON.parse(fs.readFileSync(ptrFile, 'utf8'));
+    const home = mf.home;
     assert(fs.statSync(path.join(home, mf.model.file)).size === mf.model.sizeBytes, 'model sai kích thước');
     assert(fs.existsSync(path.join(home, mf.runtime.server)), 'thiếu llama-server.exe');
     assert(fs.existsSync(path.join(home, 'Start_Qwen_Server.bat')), 'thiếu Start_Qwen_Server.bat');
-    assert(r.shortcut && fs.existsSync(path.join(__dirname, '..', 'Qwen Local.lnk')), 'thiếu lối tắt Qwen Local.lnk');
-    assert(!fs.existsSync(localLlm.legacyModelFilePath(localLlm.LOCAL_LLM_MODELS[0])), 'còn bản model trùng trong thư mục ứng dụng');
-    return `${home} • ${mf.model.file} • ${mf.runtime.server} • lối tắt OK`;
+    const inApp = home.toLowerCase().startsWith(path.join(__dirname, '..').toLowerCase());
+    assert(inApp || fs.existsSync(path.join(__dirname, '..', 'Qwen Local.lnk')), 'thiếu lối tắt Qwen Local.lnk trong thư mục app');
+    assert(!fs.existsSync(localLlm.legacyModelFilePath(localLlm.LOCAL_LLM_MODELS[0])), 'còn bản model trùng ở vị trí cũ');
+    return `file mô tả: ${ptrFile} → home ${home} (${inApp ? 'thư mục app' : 'thư mục user, có lối tắt trong app'})`;
   });
 
   /* ---------------- 4b1. Tải nhiều link video riêng lẻ ---------------- */

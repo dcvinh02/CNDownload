@@ -626,11 +626,26 @@ function getInstallableToolsCatalog() {
  * Bắt đầu tác vụ tải & cài đặt công cụ còn thiếu.
  * BẮT BUỘC: `userConfirmed === true` để đảm bảo không bao giờ tải hoặc chạy ngầm mà người dùng không biết.
  */
-function startToolInstallJob({ toolId, userConfirmed = false }) {
+function startToolInstallJob({ toolId, userConfirmed = false, qwenLocation = null }) {
   if (!userConfirmed) {
     throw new Error(
       'Cần sự xác nhận rõ ràng của người dùng (userConfirmed = true) trước khi tải và cài đặt công cụ hoặc mô hình.'
     );
+  }
+  // Windows: chọn nơi cài Qwen (ổ C ít chỗ → phải hỏi người dùng: ổ C hay thư mục ứng dụng)
+  if (toolId === 'localLlmQwen' && process.platform === 'win32') {
+    const qh = require('./qwen_shared_home');
+    const a = qh.assessLocation();
+    if (qwenLocation === 'user' || qwenLocation === 'app') {
+      qh.chooseLocation(qwenLocation);
+    } else if (a.ask) {
+      const err = new Error(
+        `Ổ ${a.userDrive} chỉ còn ${(a.userFree / 1e9).toFixed(1)} GB trống. Hãy chọn nơi cài Qwen (~6 GB): ổ ${a.userDrive} (thư mục dùng chung) hoặc thư mục ứng dụng (ổ ${a.appDrive}, còn ${a.appFree !== null ? (a.appFree / 1e9).toFixed(1) : '?'} GB).`
+      );
+      err.code = 'QWEN_LOCATION_REQUIRED';
+      err.details = { userHome: a.userHome, appHome: a.appHome, userFree: a.userFree, appFree: a.appFree, userDrive: a.userDrive, appDrive: a.appDrive, recommended: a.recommended, userTooSmall: a.userTooSmall };
+      throw err;
+    }
   }
 
   const spec = resolveOfficialToolSource(toolId);

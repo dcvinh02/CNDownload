@@ -23,6 +23,8 @@ const FULL = args.has('--full') || args.has('--profile=full');
 const YES = args.has('--yes') || args.has('-y');
 const CHECK_ONLY = args.has('--check');
 const NO_LLM = args.has('--no-llm');
+// Nơi cài Qwen trên Windows: --qwen-dir=user (%USERPROFILE%\QwenLocal) | --qwen-dir=app (thư mục ứng dụng)
+const QWEN_DIR_ARG = (Array.from(args).find((a) => a.startsWith('--qwen-dir=')) || '').split('=')[1] || null;
 const os = require('os');
 
 const IS_MAC_ARM = process.platform === 'darwin' && process.arch === 'arm64';
@@ -132,6 +134,29 @@ async function main() {
     }
   }
 
+  // Windows: ổ chứa thư mục người dùng (thường là C) ít chỗ → hỏi nơi cài Qwen (~6 GB)
+  let qwenLocation = QWEN_DIR_ARG === 'user' || QWEN_DIR_ARG === 'app' ? QWEN_DIR_ARG : null;
+  if (process.platform === 'win32' && missing.some((p) => p.id === 'localLlmQwen') && !qwenLocation) {
+    const qh = require('../src/qwen_shared_home');
+    const a = qh.assessLocation();
+    if (a.ask) {
+      const gb = (b) => (typeof b === 'number' ? (b / 1e9).toFixed(1) : '?');
+      console.log(`\n⚠️  Ổ ${a.userDrive} chỉ còn ${gb(a.userFree)} GB trống. AI dịch Local Qwen cần khoảng 6 GB.`);
+      console.log(`   [1] Cài vào ổ ${a.userDrive}: ${a.userHome}   (dùng chung cho mọi ứng dụng)${a.userTooSmall ? '  — KHÔNG ĐỦ CHỖ' : ''}`);
+      console.log(`   [2] Cài vào thư mục ứng dụng: ${a.appHome}   (ổ ${a.appDrive}, còn ${gb(a.appFree)} GB)`);
+      console.log(`   Dù chọn [2], ứng dụng khác vẫn tìm được Qwen qua ${a.userHome}\\qwen-local.json (file rất nhỏ).`);
+      if (process.stdin.isTTY) {
+        const def = a.recommended === 'user' ? '1' : '2';
+        const ans = await ask(`   Chọn [1/2] (Enter = ${def}): `);
+        qwenLocation = (ans || def) === '1' ? 'user' : 'app';
+      } else {
+        qwenLocation = a.recommended || 'app';
+        console.log(`   (Không có cửa sổ để hỏi → tự chọn ${qwenLocation === 'app' ? '[2] thư mục ứng dụng' : '[1]'}.)`);
+      }
+      console.log(`   → Cài Qwen vào: ${qwenLocation === 'app' ? a.appHome : a.userHome}`);
+    }
+  }
+
   const failed = [];
   for (const p of missing) {
     const t = catalog.get(p.id);
@@ -143,7 +168,7 @@ async function main() {
     }
     console.log(`\n▶ ${t.name}`);
     try {
-      const job = installer.startToolInstallJob({ toolId: p.id, userConfirmed: true });
+      const job = installer.startToolInstallJob({ toolId: p.id, userConfirmed: true, qwenLocation: p.id === 'localLlmQwen' ? qwenLocation : null });
       const done = await waitJob(installer, job.id, t.name);
       if (done.status === 'completed') console.log(`   ✅ ${done.verifiedVersion || 'Đã cài'}`);
       else {

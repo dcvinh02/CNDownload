@@ -52,12 +52,38 @@ const LLAMA_CPP = {
  *   llama.cpp\<build>\       bộ chạy llama-server.exe
  *   Start_Qwen_Server.bat    bật máy chủ API chuẩn OpenAI (http://127.0.0.1:8765/v1) cho app khác
  */
-const QWEN_HOME = IS_WIN ? process.env.QWEN_LOCAL_HOME || path.join(os.homedir(), 'QwenLocal') : null;
-const QWEN_MANIFEST = QWEN_HOME ? path.join(QWEN_HOME, 'qwen-local.json') : null;
+// Vị trí mặc định (ổ chứa thư mục người dùng) — file mô tả ở đây LUÔN có, kể cả khi Qwen được cài chỗ khác,
+// để ứng dụng khác chỉ cần tìm %USERPROFILE%\QwenLocal\qwen-local.json rồi đọc trường "home".
+const QWEN_DEFAULT_HOME = IS_WIN ? path.join(os.homedir(), 'QwenLocal') : null;
+// Vị trí thay thế khi ổ C ít chỗ: trong thư mục ứng dụng (người dùng chọn lúc cài)
+const QWEN_APP_HOME = IS_WIN ? path.join(PROJECT_ROOT, 'QwenLocal') : null;
 const QWEN_DEFAULT_PORT = 8765;
+
+function readManifestHome(dir) {
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(dir, 'qwen-local.json'), 'utf8'));
+    return j && j.home && fs.existsSync(j.home) ? j.home : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/** Thứ tự: biến môi trường QWEN_LOCAL_HOME → "home" trong %USERPROFILE%\QwenLocal\qwen-local.json → thư mục app (nếu đã cài ở đó) → mặc định. */
+function resolveQwenHome() {
+  if (!IS_WIN) return null;
+  if (process.env.QWEN_LOCAL_HOME) return process.env.QWEN_LOCAL_HOME;
+  return readManifestHome(QWEN_DEFAULT_HOME) || readManifestHome(QWEN_APP_HOME) || QWEN_DEFAULT_HOME;
+}
+
+let QWEN_HOME = null;
 LLAMA_CPP.legacyDir = path.join(PROJECT_ROOT, 'bin', 'tools', 'llama.cpp', LLAMA_CPP.build);
-LLAMA_CPP.dir = IS_WIN ? path.join(QWEN_HOME, 'llama.cpp', LLAMA_CPP.build) : LLAMA_CPP.legacyDir;
-LLAMA_CPP.serverBin = path.join(LLAMA_CPP.dir, IS_WIN ? 'llama-server.exe' : 'llama-server');
+/** Đặt vị trí Qwen (gọi khi người dùng chọn nơi cài). */
+function setQwenHome(dir) {
+  QWEN_HOME = dir;
+  LLAMA_CPP.dir = IS_WIN && dir ? path.join(dir, 'llama.cpp', LLAMA_CPP.build) : LLAMA_CPP.legacyDir;
+  LLAMA_CPP.serverBin = path.join(LLAMA_CPP.dir, IS_WIN ? 'llama-server.exe' : 'llama-server');
+}
+setQwenHome(resolveQwenHome());
 LLAMA_CPP.asset = LLAMA_CPP.assets[process.arch] || null;
 LLAMA_CPP.url = LLAMA_CPP.asset ? `https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_CPP.build}/${LLAMA_CPP.asset.name}` : '';
 
@@ -192,7 +218,7 @@ function getStatus() {
     running: Boolean(proc && current),
     currentModel: current ? current.modelId : null,
     sharedHome: QWEN_HOME,
-    sharedManifest: QWEN_MANIFEST && fs.existsSync(QWEN_MANIFEST) ? QWEN_MANIFEST : null
+    sharedManifest: QWEN_HOME && fs.existsSync(path.join(QWEN_HOME, 'qwen-local.json')) ? path.join(QWEN_HOME, 'qwen-local.json') : null
   };
 }
 
@@ -375,9 +401,11 @@ module.exports = {
   legacyModelFilePath,
   resolveModelFile,
   serverBinPath,
-  QWEN_HOME,
-  QWEN_MANIFEST,
+  QWEN_DEFAULT_HOME,
+  QWEN_APP_HOME,
   QWEN_DEFAULT_PORT,
+  setQwenHome,
+  resolveQwenHome,
   missingVcRuntime,
   VC_RUNTIME_DLLS,
   SERVER_LOG,
@@ -392,3 +420,7 @@ module.exports = {
   stop,
   _internals: { getProcess: () => proc }
 };
+
+// Vị trí Qwen có thể đổi khi người dùng chọn nơi cài → đọc động
+Object.defineProperty(module.exports, 'QWEN_HOME', { enumerable: true, get: () => QWEN_HOME });
+Object.defineProperty(module.exports, 'QWEN_MANIFEST', { enumerable: true, get: () => (QWEN_HOME ? path.join(QWEN_HOME, 'qwen-local.json') : null) });

@@ -294,11 +294,11 @@ function createServer() {
 
   app.post('/api/tools/install', (req, res) => {
     try {
-      const { toolId, userConfirmed } = req.body || {};
-      const job = startToolInstallJob({ toolId, userConfirmed });
+      const { toolId, userConfirmed, qwenLocation } = req.body || {};
+      const job = startToolInstallJob({ toolId, userConfirmed, qwenLocation });
       res.json({ success: true, job });
     } catch (err) {
-      res.status(400).json({ success: false, error: err.message });
+      res.status(err.code === 'QWEN_LOCATION_REQUIRED' ? 409 : 400).json({ success: false, error: err.message, code: err.code || null, details: err.details || null });
     }
   });
 

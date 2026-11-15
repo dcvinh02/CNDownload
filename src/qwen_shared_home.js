@@ -17,8 +17,100 @@ const localLlm = require('./local_llm_service');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const IS_WIN = process.platform === 'win32';
-const QWEN_HOME = localLlm.QWEN_HOME;
 const SHORTCUT_NAME = 'Qwen Local.lnk';
+const home = () => localLlm.QWEN_HOME;
+
+// Dung lượng: model 5,7 GB + bộ chạy + dư khi tải
+const QWEN_NEED_BYTES = 6.2e9;
+// Ổ C coi là "ít chỗ" nếu sau khi cài còn dưới 10 GB trống
+const LOW_SPACE_MARGIN = 10e9;
+
+function existingAncestor(p) {
+  let cur = path.resolve(p);
+  while (!fs.existsSync(cur)) {
+    const up = path.dirname(cur);
+    if (up === cur) break;
+    cur = up;
+  }
+  return cur;
+}
+
+function freeBytes(p) {
+  try {
+    const st = fs.statfsSync(existingAncestor(p));
+    return Number(st.bavail) * Number(st.bsize);
+  } catch (_) {
+    return null;
+  }
+}
+
+/** Đã cài Qwen ở đâu chưa (vị trí đang dùng, mặc định, thư mục app hoặc bản cũ). */
+function isQwenPresentAnywhere() {
+  const m = ggufModel();
+  if (!m) return false;
+  const candidates = [localLlm.modelFilePath(m), localLlm.legacyModelFilePath(m)];
+  for (const h of [localLlm.QWEN_DEFAULT_HOME, localLlm.QWEN_APP_HOME]) if (h) candidates.push(path.join(h, 'models', m.file));
+  return candidates.some((f) => f && fs.existsSync(f));
+}
+
+/**
+ * Quyết định thuần (để kiểm thử): có cần hỏi người dùng chọn nơi cài không, và nên đề xuất chỗ nào.
+ * Chỉ hỏi khi ổ của thư mục người dùng ít chỗ VÀ thư mục ứng dụng nằm ở ổ khác.
+ */
+function decideLocation({ userFree, appFree, sameDrive, need = QWEN_NEED_BYTES, margin = LOW_SPACE_MARGIN }) {
+  const userKnown = typeof userFree === 'number';
+  const userLow = userKnown && userFree < need + margin;
+  const userTooSmall = userKnown && userFree < need + 1e9;
+  const appOk = typeof appFree === 'number' ? appFree >= need + 1e9 : true;
+  if (!userLow || sameDrive) return { ask: false, choice: 'user', userLow, userTooSmall, appOk };
+  return { ask: true, recommended: appOk ? 'app' : 'user', userLow, userTooSmall, appOk };
+}
+
+/** Đánh giá dung lượng thật trên máy. */
+function assessLocation() {
+  if (!IS_WIN) return { ask: false, choice: null };
+  const userHome = localLlm.QWEN_DEFAULT_HOME;
+  const appHome = localLlm.QWEN_APP_HOME;
+  // QWEN_TEST_USER_FREE_BYTES: chỉ dùng trong kiểm thử để giả lập ổ C ít chỗ
+  const userFree = process.env.QWEN_TEST_USER_FREE_BYTES ? Number(process.env.QWEN_TEST_USER_FREE_BYTES) : freeBytes(userHome);
+  const appFree = freeBytes(appHome);
+  const sameDrive = path.parse(path.resolve(userHome)).root.toLowerCase() === path.parse(path.resolve(appHome)).root.toLowerCase();
+  const d = decideLocation({ userFree, appFree, sameDrive });
+  const explicit = Boolean(process.env.QWEN_LOCAL_HOME) || fs.existsSync(path.join(userHome, 'qwen-local.json'));
+  return {
+    ...d,
+    ask: d.ask && !explicit && !isQwenPresentAnywhere(),
+    userHome,
+    appHome,
+    userFree,
+    appFree,
+    sameDrive,
+    needBytes: QWEN_NEED_BYTES,
+    userDrive: path.parse(path.resolve(userHome)).root,
+    appDrive: path.parse(path.resolve(appHome)).root
+  };
+}
+
+/** Ghi file mô tả trỏ đường (chỉ trường "home") vào thư mục người dùng — để app khác vẫn tìm được Qwen. */
+function writePointer(target) {
+  const p = path.join(localLlm.QWEN_DEFAULT_HOME, 'qwen-local.json');
+  fs.mkdirSync(localLlm.QWEN_DEFAULT_HOME, { recursive: true });
+  let prev = {};
+  try {
+    prev = JSON.parse(fs.readFileSync(p, 'utf8'));
+  } catch (_) {}
+  fs.writeFileSync(p, JSON.stringify({ ...prev, schema: 1, name: 'Qwen Local', home: target }, null, 2), 'utf8');
+}
+
+/** Chọn nơi cài: 'user' (%USERPROFILE%\QwenLocal) hoặc 'app' (<thư mục ứng dụng>\QwenLocal). */
+function chooseLocation(choice) {
+  if (!IS_WIN) return null;
+  const target = choice === 'app' ? localLlm.QWEN_APP_HOME : localLlm.QWEN_DEFAULT_HOME;
+  fs.mkdirSync(target, { recursive: true });
+  localLlm.setQwenHome(target);
+  writePointer(target);
+  return target;
+}
 
 function ggufModel() {
   return localLlm.ALL_MODELS.find((m) => m.backend === 'llamacpp');
@@ -62,16 +154,30 @@ async function moveSafely(src, dest, { forceCopy = false } = {}) {
 let migrating = null;
 /** Chuyển bản Qwen cũ (trong thư mục ứng dụng) sang thư mục dùng chung — không tải lại. */
 function migrateLegacy(log = () => {}) {
-  if (!IS_WIN || !QWEN_HOME) return Promise.resolve({ moved: [] });
+  if (!IS_WIN || !home()) return Promise.resolve({ moved: [] });
   if (migrating) return migrating;
   migrating = (async () => {
     const moved = [];
     const m = ggufModel();
+    // Bản cũ trong thư mục app + ổ C ít chỗ (khác ổ với app) → giữ trên cùng ổ với app (đổi chỗ tức thì), không chép 5,7 GB sang C
+    const legacyThere = m && fs.existsSync(localLlm.legacyModelFilePath(m));
+    if (legacyThere && !process.env.QWEN_LOCAL_HOME && !fs.existsSync(path.join(localLlm.QWEN_DEFAULT_HOME, 'qwen-local.json'))) {
+      const userFree = freeBytes(localLlm.QWEN_DEFAULT_HOME);
+      const appFree = freeBytes(localLlm.QWEN_APP_HOME);
+      const sameDrive = path.parse(path.resolve(localLlm.QWEN_DEFAULT_HOME)).root.toLowerCase() === path.parse(path.resolve(localLlm.QWEN_APP_HOME)).root.toLowerCase();
+      const d = decideLocation({ userFree, appFree, sameDrive });
+      if (d.ask) {
+        chooseLocation('app');
+        log(`Ổ ${path.parse(localLlm.QWEN_DEFAULT_HOME).root} chỉ còn ${(userFree / 1e9).toFixed(1)} GB trống → giữ Qwen trong thư mục ứng dụng (${localLlm.QWEN_APP_HOME}); app khác vẫn tìm được qua ${path.join(localLlm.QWEN_DEFAULT_HOME, 'qwen-local.json')}.`);
+      } else {
+        chooseLocation('user');
+      }
+    }
     const oldModel = m && localLlm.legacyModelFilePath(m);
     const newModel = m && localLlm.modelFilePath(m);
     if (oldModel && fs.existsSync(oldModel) && !fs.existsSync(newModel)) {
       if (fs.statSync(oldModel).size === m.sizeBytes) {
-        log(`Đang chuyển model Qwen (${(m.sizeBytes / 1e9).toFixed(1)} GB) sang thư mục dùng chung ${QWEN_HOME}...`);
+        log(`Đang chuyển model Qwen (${(m.sizeBytes / 1e9).toFixed(1)} GB) sang ${home()}...`);
         const how = await moveSafely(oldModel, newModel);
         moved.push(`model (${how === 'rename' ? 'đổi chỗ tức thì' : 'sao chép khác ổ đĩa'})`);
         try {
@@ -93,11 +199,12 @@ function migrateLegacy(log = () => {}) {
 }
 
 function rel(p) {
-  return path.relative(QWEN_HOME, p).split(path.sep).join('\\');
+  return path.relative(home(), p).split(path.sep).join('\\');
 }
 
 /** Ghi file mô tả + file bật máy chủ + hướng dẫn trong thư mục dùng chung (chỉ khi đã cài đủ). */
 function writeHomeFiles() {
+  const QWEN_HOME = home();
   if (!IS_WIN || !QWEN_HOME) return null;
   const m = ggufModel();
   const lc = localLlm.LLAMA_CPP;
@@ -111,7 +218,7 @@ function writeHomeFiles() {
   const manifest = {
     schema: 1,
     name: 'Qwen Local',
-    description: 'Qwen3.5 9B chạy trên máy (llama.cpp) — dùng chung cho mọi ứng dụng. Đường dẫn trong file là tương đối so với thư mục chứa file này.',
+    description: 'Qwen3.5 9B chạy trên máy (llama.cpp) — dùng chung cho mọi ứng dụng. Các đường dẫn file là tương đối so với "home".',
     home: QWEN_HOME,
     model: {
       id: m.id,
@@ -140,6 +247,11 @@ function writeHomeFiles() {
     usedBy: Array.from(new Set([...(Array.isArray(prev.usedBy) ? prev.usedBy : []), PROJECT_ROOT]))
   };
   fs.writeFileSync(localLlm.QWEN_MANIFEST, JSON.stringify(manifest, null, 2), 'utf8');
+  // Qwen cài ngoài thư mục người dùng → bản sao file mô tả ở %USERPROFILE%\QwenLocal để app khác vẫn tìm thấy
+  if (path.resolve(QWEN_HOME).toLowerCase() !== path.resolve(localLlm.QWEN_DEFAULT_HOME).toLowerCase()) {
+    fs.mkdirSync(localLlm.QWEN_DEFAULT_HOME, { recursive: true });
+    fs.writeFileSync(path.join(localLlm.QWEN_DEFAULT_HOME, 'qwen-local.json'), JSON.stringify(manifest, null, 2), 'utf8');
+  }
 
   const q = (a) => (/[\s"{}]/.test(a) ? `"${a.replace(/"/g, '\\"')}"` : a);
   const bat = [
@@ -163,10 +275,11 @@ function writeHomeFiles() {
     'QWEN LOCAL — mô hình AI Qwen3.5 9B dùng chung trên máy này',
     '',
     `Thư mục: ${QWEN_HOME}`,
+    `(File mô tả luôn có ở %USERPROFILE%\\QwenLocal\\qwen-local.json — trường "home" là thư mục thật.)`,
     'File mô tả cho ứng dụng khác: qwen-local.json (model, bộ chạy, tham số, địa chỉ API).',
     '',
     'Cách dùng từ ứng dụng khác:',
-    `  1. Tìm %USERPROFILE%\\QwenLocal\\qwen-local.json (hoặc biến môi trường QWEN_LOCAL_HOME nếu có).`,
+    `  1. Đọc %USERPROFILE%\\QwenLocal\\qwen-local.json, lấy trường "home" (hoặc biến môi trường QWEN_LOCAL_HOME nếu có).`,
     '  2. Chạy Start_Qwen_Server.bat (hoặc chạy "server" + "args" trong file mô tả).',
     `  3. Gọi API chuẩn OpenAI: POST http://127.0.0.1:${localLlm.QWEN_DEFAULT_PORT}/v1/chat/completions`,
     '',
@@ -179,8 +292,17 @@ function writeHomeFiles() {
 
 /** Lối tắt "Qwen Local.lnk" trong thư mục ứng dụng trỏ tới thư mục dùng chung. */
 function ensureAppShortcut(timeoutMs = 30000) {
+  const QWEN_HOME = home();
   if (!IS_WIN || !QWEN_HOME || !fs.existsSync(QWEN_HOME)) return Promise.resolve(false);
   const lnk = path.join(PROJECT_ROOT, SHORTCUT_NAME);
+  // Qwen đã nằm ngay trong thư mục ứng dụng (thư mục "QwenLocal") → không cần lối tắt
+  const relToApp = path.relative(PROJECT_ROOT, QWEN_HOME);
+  if (!relToApp.startsWith('..') && !path.isAbsolute(relToApp)) {
+    try {
+      fs.rmSync(lnk, { force: true });
+    } catch (_) {}
+    return Promise.resolve(true);
+  }
   const esc = (s) => s.replace(/'/g, "''");
   const script = [
     "$ErrorActionPreference = 'Stop'",
@@ -217,12 +339,25 @@ async function ensureSharedHome(log = () => {}) {
     const mig = await migrateLegacy(log);
     const manifest = writeHomeFiles();
     const shortcut = manifest ? await ensureAppShortcut() : false;
-    if (mig.moved.length) log(`Đã chuyển sang ${QWEN_HOME}: ${mig.moved.join(', ')}.`);
-    return { ok: Boolean(manifest), home: QWEN_HOME, moved: mig.moved, shortcut };
+    if (mig.moved.length) log(`Đã chuyển sang ${home()}: ${mig.moved.join(', ')}.`);
+    return { ok: Boolean(manifest), home: home(), moved: mig.moved, shortcut };
   } catch (e) {
     log(`Không hoàn tất thư mục Qwen dùng chung: ${e.message}`);
     return { ok: false, error: e.message };
   }
 }
 
-module.exports = { QWEN_HOME, SHORTCUT_NAME, moveSafely, migrateLegacy, writeHomeFiles, ensureAppShortcut, ensureSharedHome };
+module.exports = {
+  SHORTCUT_NAME,
+  QWEN_NEED_BYTES,
+  LOW_SPACE_MARGIN,
+  freeBytes,
+  decideLocation,
+  assessLocation,
+  chooseLocation,
+  moveSafely,
+  migrateLegacy,
+  writeHomeFiles,
+  ensureAppShortcut,
+  ensureSharedHome
+};
