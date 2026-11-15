@@ -54,6 +54,15 @@ const {
   cancelMultiAccountScan
 } = require('./account_scanner');
 const { startLinkBatch, getLinkBatch, cancelLinkBatch } = require('./link_batch');
+
+// Windows: chuyển bản Qwen cũ (nếu có) sang thư mục dùng chung %USERPROFILE%\QwenLocal, ghi file mô tả & lối tắt — chạy nền
+if (process.platform === 'win32' && !process.env.CN_SKIP_QWEN_HOME) {
+  setImmediate(() => {
+    require('./qwen_shared_home')
+      .ensureSharedHome((m) => console.log(`[Qwen Local] ${m}`))
+      .catch(() => {});
+  });
+}
 const {
   VOICE_CATALOG,
   LOCAL_MODELS_CATALOG,

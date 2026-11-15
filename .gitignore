@@ -59,3 +59,6 @@ TAI_LIEU_CONG_CU_VA_HOAT_DONG.md
 # Bộ nhớ đệm Python
 __pycache__/
 *.pyc
+
+# Lối tắt tới thư mục Qwen dùng chung (tạo trên máy Windows)
+Qwen Local.lnk

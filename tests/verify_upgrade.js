@@ -796,6 +796,43 @@ async function main() {
     return `"${String(det.desc || '').slice(0, 30)}" • ${urls.length} link phát`;
   });
 
+  /* ---------------- 4b0. Qwen dùng chung (Windows: %USERPROFILE%\QwenLocal) ---------------- */
+  console.log('\n--- [4b0] Qwen dùng chung cho mọi ứng dụng ---');
+  await check('Chuyển bản Qwen cũ sang thư mục dùng chung an toàn (đổi chỗ cùng ổ; khác ổ: sao chép → kiểm → mới xóa bản cũ)', async () => {
+    const { moveSafely } = require('../src/qwen_shared_home');
+    const d = path.join(TMP, 'qwen_move');
+    fs.mkdirSync(path.join(d, 'old', 'llama'), { recursive: true });
+    const data = Buffer.alloc(3 * 1024 * 1024, 7);
+    fs.writeFileSync(path.join(d, 'old', 'model.gguf'), data);
+    fs.writeFileSync(path.join(d, 'old', 'llama', 'llama-server.exe'), 'bin');
+    const how1 = await moveSafely(path.join(d, 'old', 'model.gguf'), path.join(d, 'home', 'models', 'model.gguf'));
+    fs.writeFileSync(path.join(d, 'old', 'model2.gguf'), data);
+    const how2 = await moveSafely(path.join(d, 'old', 'model2.gguf'), path.join(d, 'home', 'models', 'model2.gguf'), { forceCopy: true });
+    const how3 = await moveSafely(path.join(d, 'old', 'llama'), path.join(d, 'home', 'llama.cpp', 'b1'), { forceCopy: true });
+    assert(how1 === 'rename' && how2 === 'copy' && how3 === 'copy', `${how1}/${how2}/${how3}`);
+    assert(fs.statSync(path.join(d, 'home', 'models', 'model2.gguf')).size === data.length, 'bản sao thiếu dữ liệu');
+    assert(!fs.existsSync(path.join(d, 'old', 'model.gguf')) && !fs.existsSync(path.join(d, 'old', 'model2.gguf')) && !fs.existsSync(path.join(d, 'old', 'llama')), 'bản cũ chưa được dọn');
+    assert(fs.readFileSync(path.join(d, 'home', 'llama.cpp', 'b1', 'llama-server.exe'), 'utf8') === 'bin', 'thư mục bộ chạy chuyển sai');
+    return 'đổi chỗ + sao chép file 3 MB + sao chép thư mục: đủ dữ liệu, bản cũ đã dọn';
+  });
+  await check('Windows: Qwen nằm ở %USERPROFILE%\\QwenLocal có qwen-local.json hợp lệ + Start_Qwen_Server.bat + lối tắt trong thư mục app', async () => {
+    if (process.platform !== 'win32') throw skip('Chỉ áp dụng Windows (macOS dùng MLX trong thư mục ứng dụng).');
+    const localLlm = require('../src/local_llm_service');
+    const qh = require('../src/qwen_shared_home');
+    if (!localLlm.isModelInstalled(localLlm.LOCAL_LLM_MODELS[0].id)) throw skip('Chưa cài AI Local Qwen.', true);
+    const r = await qh.ensureSharedHome();
+    assert(r.ok, `ensureSharedHome: ${r.error || ''}`);
+    const mf = JSON.parse(fs.readFileSync(localLlm.QWEN_MANIFEST, 'utf8'));
+    const home = path.dirname(localLlm.QWEN_MANIFEST);
+    assert(home.toLowerCase() === path.join(os.homedir(), 'QwenLocal').toLowerCase(), `thư mục: ${home}`);
+    assert(fs.statSync(path.join(home, mf.model.file)).size === mf.model.sizeBytes, 'model sai kích thước');
+    assert(fs.existsSync(path.join(home, mf.runtime.server)), 'thiếu llama-server.exe');
+    assert(fs.existsSync(path.join(home, 'Start_Qwen_Server.bat')), 'thiếu Start_Qwen_Server.bat');
+    assert(r.shortcut && fs.existsSync(path.join(__dirname, '..', 'Qwen Local.lnk')), 'thiếu lối tắt Qwen Local.lnk');
+    assert(!fs.existsSync(localLlm.legacyModelFilePath(localLlm.LOCAL_LLM_MODELS[0])), 'còn bản model trùng trong thư mục ứng dụng');
+    return `${home} • ${mf.model.file} • ${mf.runtime.server} • lối tắt OK`;
+  });
+
   /* ---------------- 4b1. Tải nhiều link video riêng lẻ ---------------- */
   console.log('\n--- [4b1] Tải nhiều link cùng lúc (mạng thật) ---');
   await check('Tải nhiều link: bỏ trùng, tải đúng video thật, link không tồn tại báo lỗi (không tải nhầm clip tĩnh của trang)', async () => {

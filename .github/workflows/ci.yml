@@ -31,8 +31,8 @@ jobs:
           path: |
             bin/models
             bin/tools/python
-            bin/tools/llama.cpp
-          key: ai-${{ runner.os }}-${{ hashFiles('requirements/*.txt', 'src/tool_installer.js', 'src/python_env.js') }}
+            ~/QwenLocal
+          key: ai-${{ runner.os }}-${{ hashFiles('requirements/*.txt', 'src/tool_installer.js', 'src/python_env.js', 'src/qwen_shared_home.js') }}
 
       # Windows: cài cả AI dịch Local Qwen3.5 9B (llama.cpp, chạy CPU trên máy CI) — giống máy người dùng
       - name: Cài thành phần AI (Python 3.12, model) như máy mới
@@ -66,6 +66,37 @@ jobs:
           Get-Process node, llama-server -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
           if ($missing.Count -gt 0) { throw ("Còn thiếu: " + (($missing | ForEach-Object { $_.id }) -join ', ')) }
           Write-Host 'OK: Start_App_Windows.bat mở được ứng dụng, giao diện + API phản hồi, đủ công cụ'
+
+      # "Ứng dụng khác" chỉ biết thư mục user: đọc %USERPROFILE%\QwenLocal\qwen-local.json → bật máy chủ → dịch thử 1 câu
+      - name: Qwen dùng chung — ứng dụng khác tìm & chạy qua qwen-local.json (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $home2 = Join-Path $env:USERPROFILE 'QwenLocal'
+          $mf = Join-Path $home2 'qwen-local.json'
+          if (-not (Test-Path $mf)) { throw "Không có $mf" }
+          $m = Get-Content $mf -Raw -Encoding UTF8 | ConvertFrom-Json
+          $exe = Join-Path $home2 $m.runtime.server
+          $gguf = Join-Path $home2 $m.model.file
+          if (-not (Test-Path $exe)) { throw "Thiếu bộ chạy $exe" }
+          if ((Get-Item $gguf).Length -ne $m.model.sizeBytes) { throw "Model sai kích thước: $gguf" }
+          if (-not (Test-Path (Join-Path $home2 'Start_Qwen_Server.bat'))) { throw 'Thiếu Start_Qwen_Server.bat' }
+          $lnk = Join-Path $PWD 'Qwen Local.lnk'
+          if (-not (Test-Path $lnk)) { throw 'Thiếu lối tắt Qwen Local.lnk trong thư mục ứng dụng' }
+          $t = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk).TargetPath
+          if ($t -ne $home2) { throw "Lối tắt trỏ sai: $t" }
+          Write-Host "OK: manifest + model + bộ chạy + lối tắt → $t"
+          $p = Start-Process -FilePath cmd.exe -ArgumentList '/c', (Join-Path $home2 'Start_Qwen_Server.bat'), '8799' -PassThru -WindowStyle Hidden
+          $ready = $false
+          for ($i = 0; $i -lt 150; $i++) { Start-Sleep -Seconds 2; try { if ((Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8799/health).StatusCode -eq 200) { $ready = $true; break } } catch {} }
+          if (-not $ready) { Get-Process llama-server -ErrorAction SilentlyContinue | Stop-Process -Force; throw 'Máy chủ Qwen không sẵn sàng sau 300 giây' }
+          $body = @{ messages = @(@{ role = 'system'; content = 'Dịch câu tiếng Trung sang tiếng Việt. Chỉ trả về bản dịch.' }, @{ role = 'user'; content = '大家好，欢迎来到我的频道。' }); max_tokens = 64; temperature = 0.2 } | ConvertTo-Json -Depth 5
+          $r = Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8799/v1/chat/completions -ContentType 'application/json; charset=utf-8' -Body ([System.Text.Encoding]::UTF8.GetBytes($body)) -TimeoutSec 600
+          $text = $r.choices[0].message.content
+          Get-Process llama-server -ErrorAction SilentlyContinue | Stop-Process -Force
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          if (-not $text) { throw 'Không nhận được bản dịch' }
+          Write-Host "OK: ứng dụng khác gọi Qwen dùng chung → $text"
 
       - name: Tạo lối tắt Desktop (Windows)
         if: runner.os == 'Windows'

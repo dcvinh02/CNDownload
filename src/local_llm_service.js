@@ -3,13 +3,15 @@
  *
  * - macOS chip Apple: `mlx_lm server` (Apple MLX) trong môi trường riêng `.venv-llm`, model MLX 4-bit.
  * - Windows 10/11 (x64/arm64): `llama-server.exe` (llama.cpp bản chính thức, Vulkan — dùng GPU NVIDIA/AMD/Intel
- *   nếu có, tự chạy CPU nếu không), model GGUF Q4_K_M. Không cần cài gì vào hệ thống, mọi thứ nằm trong thư mục dự án.
+ *   nếu có, tự chạy CPU nếu không), model GGUF Q4_K_M. Cài vào THƯ MỤC DÙNG CHUNG của người dùng
+ *   `%USERPROFILE%\QwenLocal` (có file mô tả `qwen-local.json`) để các ứng dụng khác tìm và dùng lại, không tải trùng.
  *
  * Chung: khởi động khi cần, tự tắt sau IDLE_MS; chỉ nghe 127.0.0.1, cổng ngẫu nhiên; tắt chế độ "thinking";
  * chạy qua llm_server_wrapper.py để máy chủ tự tắt khi ứng dụng thoát (không để tiến trình mồ côi).
  */
 
 const fs = require('fs');
+const os = require('os');
 const net = require('net');
 const path = require('path');
 const { spawn } = require('child_process');
@@ -43,7 +45,18 @@ const LLAMA_CPP = {
     arm64: { name: 'llama-b12387-bin-win-vulkan-arm64.zip', sha256: 'd82aab38a46ebaeb174e85487febbc7774da57538adb94c82d57861b674145d1', sizeMB: 24 }
   }
 };
-LLAMA_CPP.dir = path.join(PROJECT_ROOT, 'bin', 'tools', 'llama.cpp', LLAMA_CPP.build);
+/**
+ * Windows: Qwen dùng chung cho mọi ứng dụng — %USERPROFILE%\QwenLocal (đổi được bằng biến môi trường QWEN_LOCAL_HOME).
+ *   qwen-local.json          file mô tả (model, bộ chạy, tham số khuyên dùng, cách gọi API) — app khác đọc file này
+ *   models\<file .gguf>      model
+ *   llama.cpp\<build>\       bộ chạy llama-server.exe
+ *   Start_Qwen_Server.bat    bật máy chủ API chuẩn OpenAI (http://127.0.0.1:8765/v1) cho app khác
+ */
+const QWEN_HOME = IS_WIN ? process.env.QWEN_LOCAL_HOME || path.join(os.homedir(), 'QwenLocal') : null;
+const QWEN_MANIFEST = QWEN_HOME ? path.join(QWEN_HOME, 'qwen-local.json') : null;
+const QWEN_DEFAULT_PORT = 8765;
+LLAMA_CPP.legacyDir = path.join(PROJECT_ROOT, 'bin', 'tools', 'llama.cpp', LLAMA_CPP.build);
+LLAMA_CPP.dir = IS_WIN ? path.join(QWEN_HOME, 'llama.cpp', LLAMA_CPP.build) : LLAMA_CPP.legacyDir;
 LLAMA_CPP.serverBin = path.join(LLAMA_CPP.dir, IS_WIN ? 'llama-server.exe' : 'llama-server');
 LLAMA_CPP.asset = LLAMA_CPP.assets[process.arch] || null;
 LLAMA_CPP.url = LLAMA_CPP.asset ? `https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_CPP.build}/${LLAMA_CPP.asset.name}` : '';
@@ -89,7 +102,9 @@ const VC_RUNTIME_DLLS = ['msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll
 function missingVcRuntime() {
   if (!IS_WIN) return [];
   const sys32 = path.join(process.env.SystemRoot || process.env.windir || 'C:\\Windows', 'System32');
-  return VC_RUNTIME_DLLS.filter((d) => !fs.existsSync(path.join(sys32, d)) && !fs.existsSync(path.join(LLAMA_CPP.dir, d)));
+  return VC_RUNTIME_DLLS.filter(
+    (d) => !fs.existsSync(path.join(sys32, d)) && !fs.existsSync(path.join(LLAMA_CPP.dir, d)) && !fs.existsSync(path.join(LLAMA_CPP.legacyDir, d))
+  );
 }
 
 // Đã gặp crash do driver GPU/Vulkan → chạy CPU cho các lần sau trong phiên này
@@ -97,12 +112,37 @@ let llamaCpuOnly = false;
 
 function isRuntimeInstalled() {
   if (BACKEND === 'mlx') return fs.existsSync(PYTHON_BIN) && fs.existsSync(path.join(VENV_DIR, 'lib'));
-  if (BACKEND === 'llamacpp') return fs.existsSync(LLAMA_CPP.serverBin) && fs.existsSync(CORE_PYTHON) && missingVcRuntime().length === 0;
+  if (BACKEND === 'llamacpp') return fs.existsSync(serverBinPath()) && fs.existsSync(CORE_PYTHON) && missingVcRuntime().length === 0;
   return false;
 }
 
+/** Thư mục chứa model: Windows (GGUF) → %USERPROFILE%\QwenLocal\models; Mac (MLX) → bin/models/llm/<id>. */
+function modelDir(model) {
+  return model && model.backend === 'llamacpp' && IS_WIN ? path.join(QWEN_HOME, 'models') : path.join(MODELS_DIR, model.id);
+}
+
 function modelFilePath(model) {
-  return model.file ? path.join(MODELS_DIR, model.id, model.file) : path.join(MODELS_DIR, model.id);
+  return model.file ? path.join(modelDir(model), model.file) : modelDir(model);
+}
+
+/** Vị trí cũ (trong thư mục ứng dụng) của bản Qwen đã tải trước khi có thư mục dùng chung. */
+function legacyModelFilePath(model) {
+  return model.file ? path.join(MODELS_DIR, model.id, model.file) : null;
+}
+
+/** File model thực dùng: thư mục dùng chung; nếu chưa chuyển xong thì dùng tạm bản cũ trong thư mục ứng dụng. */
+function resolveModelFile(model) {
+  const p = modelFilePath(model);
+  if (fs.existsSync(p)) return p;
+  const old = legacyModelFilePath(model);
+  return old && fs.existsSync(old) ? old : p;
+}
+
+/** llama-server.exe thực dùng (thư mục dùng chung, hoặc bản cũ khi chưa chuyển). */
+function serverBinPath() {
+  if (fs.existsSync(LLAMA_CPP.serverBin)) return LLAMA_CPP.serverBin;
+  const old = path.join(LLAMA_CPP.legacyDir, IS_WIN ? 'llama-server.exe' : 'llama-server');
+  return fs.existsSync(old) ? old : LLAMA_CPP.serverBin;
 }
 
 function hasIncompleteDownload(dir) {
@@ -121,7 +161,7 @@ function isModelInstalled(modelId) {
   if (spec && spec.file) {
     // GGUF: 1 file duy nhất, đủ kích thước (SHA-256 đã kiểm khi tải)
     try {
-      return fs.statSync(path.join(dir, spec.file)).size === spec.sizeBytes;
+      return fs.statSync(resolveModelFile(spec)).size === spec.sizeBytes;
     } catch (_) {
       return false;
     }
@@ -150,7 +190,9 @@ function getStatus() {
     runtimeInstalled: isRuntimeInstalled(),
     models: LOCAL_LLM_MODELS.map((m) => ({ ...m, installed: isModelInstalled(m.id) })),
     running: Boolean(proc && current),
-    currentModel: current ? current.modelId : null
+    currentModel: current ? current.modelId : null,
+    sharedHome: QWEN_HOME,
+    sharedManifest: QWEN_MANIFEST && fs.existsSync(QWEN_MANIFEST) ? QWEN_MANIFEST : null
   };
 }
 
@@ -223,8 +265,8 @@ function buildServerCommand(model, port) {
   if (BACKEND === 'llamacpp') {
     const args = [
       WRAPPER,
-      '--exec', LLAMA_CPP.serverBin,
-      '-m', modelFilePath(model),
+      '--exec', serverBinPath(),
+      '-m', resolveModelFile(model),
       '--host', '127.0.0.1',
       '--port', String(port),
       '-c', '12288',
@@ -300,7 +342,7 @@ async function ensureRunning(modelId) {
     }
   });
   proc = child;
-  current = { modelId: model.id, port, baseUrl, modelPath: modelFilePath(model) };
+  current = { modelId: model.id, port, baseUrl, modelPath: resolveModelFile(model) };
   // Nạp 5–6 GB từ ổ cứng: SSD ~10–30 s, HDD có thể vài phút
   startPromise = waitReady(baseUrl, child, 360000).then(() => {
     touch();
@@ -330,6 +372,12 @@ module.exports = {
   ALL_MODELS,
   CORE_PYTHON,
   modelFilePath,
+  legacyModelFilePath,
+  resolveModelFile,
+  serverBinPath,
+  QWEN_HOME,
+  QWEN_MANIFEST,
+  QWEN_DEFAULT_PORT,
   missingVcRuntime,
   VC_RUNTIME_DLLS,
   SERVER_LOG,

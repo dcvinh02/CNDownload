@@ -224,10 +224,10 @@ function resolveOfficialToolSource(toolId, platform = process.platform, arch = p
             minBytes: 0,
             estimatedSizeMB: 5800,
             description:
-              'Dịch Trung–Việt bằng Qwen3.5 9B chạy ngay trên máy Windows (GPU NVIDIA/AMD/Intel qua Vulkan, tự chạy CPU nếu không có GPU). Không gửi dữ liệu ra ngoài, không cần API Key, không cài gì vào hệ thống. Nên có RAM 16 GB.',
+              `Dịch Trung–Việt bằng Qwen3.5 9B chạy ngay trên máy Windows (GPU NVIDIA/AMD/Intel qua Vulkan, tự chạy CPU nếu không có GPU). Không gửi dữ liệu ra ngoài, không cần API Key. Cài vào thư mục dùng chung ${localLlm.QWEN_HOME || '%USERPROFILE%\\QwenLocal'} (file mô tả qwen-local.json) để ứng dụng khác dùng lại; thư mục app có lối tắt "Qwen Local". Nên có RAM 16 GB.`,
             remediationSteps: [
-              `Tải thủ công ${localLlm.LLAMA_CPP.url} → giải nén vào bin/tools/llama.cpp/${localLlm.LLAMA_CPP.build}/ (SHA-256 ${localLlm.LLAMA_CPP.asset ? localLlm.LLAMA_CPP.asset.sha256 : ''}).`,
-              'Tải Qwen3.5-9B-Q4_K_M.gguf tại https://huggingface.co/unsloth/Qwen3.5-9B-GGUF → đặt vào bin/models/llm/Qwen3.5-9B-Q4_K_M-GGUF/.',
+              `Tải thủ công ${localLlm.LLAMA_CPP.url} → giải nén vào %USERPROFILE%\\QwenLocal\\llama.cpp\\${localLlm.LLAMA_CPP.build}\\ (SHA-256 ${localLlm.LLAMA_CPP.asset ? localLlm.LLAMA_CPP.asset.sha256 : ''}).`,
+              'Tải Qwen3.5-9B-Q4_K_M.gguf tại https://huggingface.co/unsloth/Qwen3.5-9B-GGUF → đặt vào %USERPROFILE%\\QwenLocal\\models\\.',
               'Máy dưới 16 GB RAM có thể chậm; khi đó nên dùng Gemini (miễn phí qua AI Studio).'
             ]
           }
@@ -982,6 +982,11 @@ async function ensureVcRedist(job) {
 async function installLlamaCppLlm(job) {
   const lc = localLlm.LLAMA_CPP;
   if (!lc.asset) throw new Error(`Chưa có bản llama.cpp cho kiến trúc ${process.arch}.`);
+  const qwenHome = require('./qwen_shared_home');
+  // Đã có bản tải trước đây trong thư mục ứng dụng → chuyển sang thư mục dùng chung, không tải lại
+  await qwenHome.migrateLegacy((msg) => {
+    job.step = msg;
+  });
   job.progress = 5;
   job.step = 'Kiểm tra môi trường Python lõi (dùng để tải model và giám sát máy chủ AI)...';
   await pyEnv.ensureCoreVenv((msg) => {
@@ -991,7 +996,8 @@ async function installLlamaCppLlm(job) {
   await ensureVcRedist(job);
 
   if (!fs.existsSync(lc.serverBin)) {
-    const zip = path.join(PROJECT_ROOT, 'bin', 'tools', `${lc.asset.name}.part`);
+    fs.mkdirSync(localLlm.QWEN_HOME, { recursive: true });
+    const zip = path.join(localLlm.QWEN_HOME, `${lc.asset.name}.part`);
     job.progress = 10;
     await downloadFileWithProgress(lc.url, zip, (done, total) => {
       job.step = `Đang tải llama.cpp ${lc.build} (${(done / 1048576).toFixed(0)}/${((total || lc.asset.sizeMB * 1048576) / 1048576).toFixed(0)} MB)...`;
@@ -1011,7 +1017,7 @@ async function installLlamaCppLlm(job) {
 
   const model = localLlm.LOCAL_LLM_MODELS[0];
   if (!localLlm.isModelInstalled(model.id)) {
-    const dir = path.join(localLlm.MODELS_DIR, model.id);
+    const dir = path.dirname(localLlm.modelFilePath(model));
     fs.mkdirSync(dir, { recursive: true });
     job.progress = 15;
     job.step = `Đang tải model ${model.label} (~${model.sizeGB} GB) từ HuggingFace (tải tiếp được nếu bị ngắt)...`;
@@ -1048,6 +1054,11 @@ async function installLlamaCppLlm(job) {
     }
     fs.rmSync(path.join(dir, '.cache'), { recursive: true, force: true });
   }
+  job.step = `Đang ghi thông tin Qwen dùng chung (${localLlm.QWEN_HOME}) và tạo lối tắt "Qwen Local"...`;
+  const sh = await qwenHome.ensureSharedHome((msg) => {
+    job.step = msg;
+  });
+  if (!sh.ok) throw new Error(`Đã tải Qwen nhưng chưa ghi được thư mục dùng chung: ${sh.error || 'thiếu file'}`);
 }
 
 async function verifyLocalLlm() {
