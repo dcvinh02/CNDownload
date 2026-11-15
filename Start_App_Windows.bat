@@ -22,7 +22,13 @@ if errorlevel 1 (
   echo [2/2] Chon cac thanh phan AI can cai ^(Python, model^) - moi muc deu hoi truoc, can Internet...
   node scripts\setup.js
   if errorlevel 1 goto :fail
-  if not exist "%USERPROFILE%\Desktop\CN Video Scraper Pro.lnk" call "%~dp0Tao_Shortcut_Desktop.bat" --quiet
+  call "%~dp0Tao_Shortcut_Desktop.bat" --quiet
+)
+
+if exist "%~dp0CNVideoScraperPro.exe" (
+  echo Dang mo CN Video Scraper Pro...
+  start "" "%~dp0CNVideoScraperPro.exe"
+  exit /b 0
 )
 
 echo Dang khoi dong CN Video Scraper Pro... (cua so ung dung se tu mo)

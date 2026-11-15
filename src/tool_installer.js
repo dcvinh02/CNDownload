@@ -303,7 +303,167 @@ function resolveOfficialToolSource(toolId, platform = process.platform, arch = p
     }
   };
 
+  definitions.windowsApp = {
+    id: 'windowsApp',
+    name: 'Ứng dụng Windows CNVideoScraperPro.exe (cửa sổ riêng, không cần mở Edge)',
+    category: 'Ứng dụng',
+    officialProvider: `NuGet (Microsoft.Web.WebView2 ${WEBVIEW2_SDK.version}) + bộ dịch C# có sẵn của Windows`,
+    license: 'BSD-3-Clause (Microsoft WebView2 SDK)',
+    downloadUrl: WEBVIEW2_SDK.url,
+    targetPath: WINDOWS_APP_EXE,
+    archiveType: 'webview2_app',
+    minBytes: 0,
+    estimatedSizeMB: 2,
+    description:
+      'Dựng CNVideoScraperPro.exe ngay trên máy: cửa sổ ứng dụng riêng (Microsoft WebView2), máy chủ chạy ẩn, đóng cửa sổ là tắt hẳn. Chỉ tải ~10 MB gói SDK chính thức (giữ lại ~1 MB).',
+    remediationSteps: [
+      `Tải thủ công ${WEBVIEW2_SDK.url} (SHA-256 ${WEBVIEW2_SDK.sha256}), đổi đuôi .zip rồi giải nén.`,
+      'Chép lib\\net462\\Microsoft.Web.WebView2.Core.dll, Microsoft.Web.WebView2.WinForms.dll vào bin\\windows_app\\ và runtimes\\win-x64\\native\\WebView2Loader.dll vào bin\\windows_app\\x64\\, rồi bấm cài lại mục này.',
+      'Máy chưa có Microsoft Edge WebView2 Runtime: tải tại https://go.microsoft.com/fwlink/p/?LinkId=2124703'
+    ]
+  };
+
   return definitions[toolId] || null;
+}
+
+/* ---------- Ứng dụng Windows (WebView2) ---------- */
+// Gói SDK chính thức của Microsoft trên NuGet — ghim phiên bản & SHA-256
+const WEBVIEW2_SDK = {
+  version: '1.0.4258.31',
+  url: 'https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/1.0.4258.31/microsoft.web.webview2.1.0.4258.31.nupkg',
+  sha256: '56f7f4b8bf9aee4b8efefbbdd4f67d5f74ebd1b100ed0806da71bf76af481aa9',
+  files: [
+    ['lib/net462/Microsoft.Web.WebView2.Core.dll', 'Microsoft.Web.WebView2.Core.dll'],
+    ['lib/net462/Microsoft.Web.WebView2.WinForms.dll', 'Microsoft.Web.WebView2.WinForms.dll'],
+    ['runtimes/win-x64/native/WebView2Loader.dll', 'x64/WebView2Loader.dll'],
+    ['runtimes/win-arm64/native/WebView2Loader.dll', 'arm64/WebView2Loader.dll']
+  ]
+};
+const WINDOWS_APP_DIR = path.join(PROJECT_ROOT, 'bin', 'windows_app');
+const WINDOWS_APP_EXE = path.join(PROJECT_ROOT, 'CNVideoScraperPro.exe');
+const WINDOWS_APP_SRC = path.join(PROJECT_ROOT, 'src', 'windows_app', 'CNVideoScraperPro.cs');
+
+function isWindowsAppInstalled() {
+  return fs.existsSync(WINDOWS_APP_EXE) && WEBVIEW2_SDK.files.every(([, dst]) => fs.existsSync(path.join(WINDOWS_APP_DIR, dst)));
+}
+
+/** Bộ dịch C# có sẵn trong Windows (.NET Framework 4.x). */
+function findCsc() {
+  const win = process.env.SystemRoot || process.env.windir || 'C:\\Windows';
+  for (const fw of ['Framework64', 'Framework']) {
+    const p = path.join(win, 'Microsoft.NET', fw, 'v4.0.30319', 'csc.exe');
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
+function runCapture(bin, args, opts = {}) {
+  return new Promise((resolve) => {
+    let out = '';
+    let p;
+    try {
+      p = spawn(bin, args, { windowsHide: true, ...opts });
+    } catch (e) {
+      return resolve({ code: -1, out: e.message });
+    }
+    const t = setTimeout(() => {
+      try {
+        p.kill();
+      } catch (_) {}
+    }, opts.timeoutMs || 120000);
+    p.stdout && p.stdout.on('data', (d) => (out += d.toString('utf8')));
+    p.stderr && p.stderr.on('data', (d) => (out += d.toString('utf8')));
+    p.on('error', (e) => {
+      clearTimeout(t);
+      resolve({ code: -1, out: e.message });
+    });
+    p.on('close', (code) => {
+      clearTimeout(t);
+      resolve({ code, out });
+    });
+  });
+}
+
+async function installWindowsApp(job) {
+  if (process.platform !== 'win32') throw new Error('Ứng dụng .exe chỉ dành cho Windows (macOS đã có CNVideoScraperPro.app).');
+  const csc = findCsc();
+  if (!csc) throw new Error('Không thấy bộ dịch C# của .NET Framework 4 (csc.exe) trong Windows.');
+  fs.mkdirSync(WINDOWS_APP_DIR, { recursive: true });
+  if (!WEBVIEW2_SDK.files.every(([, dst]) => fs.existsSync(path.join(WINDOWS_APP_DIR, dst)))) {
+    const pkg = path.join(WINDOWS_APP_DIR, 'webview2-sdk.zip.part');
+    job.progress = 10;
+    job.step = `Đang tải Microsoft WebView2 SDK ${WEBVIEW2_SDK.version} từ NuGet (~10 MB)...`;
+    await downloadFileWithProgress(WEBVIEW2_SDK.url, pkg, (dl, total) => {
+      if (total > 0) job.progress = 10 + Math.round((dl / total) * 40);
+    });
+    const sha = await computeFileSha256(pkg);
+    if (sha !== WEBVIEW2_SDK.sha256) {
+      fs.rmSync(pkg, { force: true });
+      throw new Error(`Mã SHA-256 của gói WebView2 không khớp (nhận ${sha.slice(0, 16)}…) — đã hủy, không giải nén.`);
+    }
+    job.progress = 55;
+    job.step = 'Đang lấy 3 thư viện cần thiết từ gói WebView2 (~1 MB)...';
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cn_wv2_'));
+    try {
+      const zip = path.join(tmp, 'sdk.zip');
+      fs.renameSync(pkg, zip);
+      const win = process.env.SystemRoot || 'C:\\Windows';
+      const tarExe = path.join(win, 'System32', 'tar.exe');
+      const r = await runCapture(fs.existsSync(tarExe) ? tarExe : 'tar', ['-xf', zip, '-C', tmp, ...WEBVIEW2_SDK.files.map(([src]) => src)]);
+      if (r.code !== 0) throw new Error(`Giải nén gói WebView2 lỗi: ${r.out.slice(-300)}`);
+      for (const [src, dst] of WEBVIEW2_SDK.files) {
+        const to = path.join(WINDOWS_APP_DIR, dst);
+        fs.mkdirSync(path.dirname(to), { recursive: true });
+        fs.copyFileSync(path.join(tmp, ...src.split('/')), to);
+      }
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+  job.progress = 70;
+  job.step = 'Đang dựng CNVideoScraperPro.exe bằng bộ dịch C# có sẵn của Windows...';
+  // Thư viện WebView2 nằm trong bin\windows_app (không rải DLL ra thư mục gốc)
+  fs.writeFileSync(
+    `${WINDOWS_APP_EXE}.config`,
+    '<?xml version="1.0" encoding="utf-8"?>\r\n<configuration>\r\n  <startup><supportedRuntime version="v4.0" sku=".NETFramework,Version=v4.6.2" /></startup>\r\n  <runtime>\r\n    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1"><probing privatePath="bin\\windows_app" /></assemblyBinding>\r\n  </runtime>\r\n</configuration>\r\n',
+    'utf8'
+  );
+  const tmpExe = `${WINDOWS_APP_EXE}.new`;
+  const args = [
+    '/nologo',
+    '/target:winexe',
+    '/platform:anycpu',
+    '/optimize+',
+    '/codepage:65001',
+    `/out:${tmpExe}`,
+    `/win32icon:${path.join(PROJECT_ROOT, 'public', 'icon.ico')}`,
+    `/reference:${path.join(WINDOWS_APP_DIR, 'Microsoft.Web.WebView2.Core.dll')}`,
+    `/reference:${path.join(WINDOWS_APP_DIR, 'Microsoft.Web.WebView2.WinForms.dll')}`,
+    '/reference:System.Windows.Forms.dll',
+    '/reference:System.Drawing.dll',
+    WINDOWS_APP_SRC
+  ];
+  const r = await runCapture(csc, args, { cwd: PROJECT_ROOT });
+  if (r.code !== 0 || !fs.existsSync(tmpExe)) throw new Error(`Dựng CNVideoScraperPro.exe lỗi: ${r.out.slice(-800)}`);
+  // Có bản cũ đang chạy thì không ghi đè được → báo rõ
+  try {
+    fs.rmSync(WINDOWS_APP_EXE, { force: true });
+  } catch (e) {
+    fs.rmSync(tmpExe, { force: true });
+    throw new Error('CNVideoScraperPro.exe đang mở — hãy đóng ứng dụng rồi cài lại mục này.');
+  }
+  fs.renameSync(tmpExe, WINDOWS_APP_EXE);
+  job.progress = 85;
+  job.step = 'Đang kiểm tra ứng dụng (nạp WebView2)...';
+}
+
+async function verifyWindowsApp() {
+  if (!isWindowsAppInstalled()) return { ok: false, error: 'Chưa có CNVideoScraperPro.exe hoặc thư viện WebView2.' };
+  const r = await runCapture(WINDOWS_APP_EXE, ['--selftest'], { cwd: PROJECT_ROOT, timeoutMs: 60000 });
+  const out = r.out.trim();
+  if (r.code === 0 && /^OK/.test(out)) return { ok: true, version: `CNVideoScraperPro.exe • ${out.replace(/^OK\s*/, '')}`, sha256: null, sizeBytes: fs.statSync(WINDOWS_APP_EXE).size };
+  if (r.code === 2) return { ok: false, error: 'Đã dựng CNVideoScraperPro.exe nhưng máy chưa có Microsoft Edge WebView2 Runtime — cài tại https://go.microsoft.com/fwlink/p/?LinkId=2124703 (app vẫn mở được bằng trình duyệt).' };
+  return { ok: false, error: `CNVideoScraperPro.exe không chạy được: ${out || `mã ${r.code}`}` };
 }
 
 function computeFileSha256(filePath) {
@@ -432,6 +592,9 @@ async function verifyInstalledToolOrModel(toolId) {
 
   if (toolId === 'localLlmQwen') {
     return verifyLocalLlm();
+  }
+  if (toolId === 'windowsApp') {
+    return verifyWindowsApp();
   }
   if (toolId === 'pythonCore') {
     let ok = await pyEnv.pythonImports(pyEnv.VENVS.core, ['faster_whisper', 'sherpa_onnx', 'ctranslate2', 'numpy']);
@@ -577,11 +740,12 @@ function getInstallableToolsCatalog() {
 
 function getInstallableToolsCatalogRaw() {
   // Không liệt kê Argos (localNmt) và Whisper tiny (localAsr): đã kiểm nghiệm chất lượng kém, thay bằng Qwen3.5 9B / Whisper small.
-  const ids = ['pythonCore', 'ytdlp', 'ffmpeg', 'webkitSniffer', 'localAsrSmall', 'speakerDiarization', 'voiceSeparation', 'localLlmQwen', 'localTts', 'vieneuTts'];
+  const ids = ['windowsApp', 'pythonCore', 'ytdlp', 'ffmpeg', 'webkitSniffer', 'localAsrSmall', 'speakerDiarization', 'voiceSeparation', 'localLlmQwen', 'localTts', 'vieneuTts'];
   const modelsStatus = getLocalModelsStatus();
 
   return ids
     .filter((id) => !(id === 'webkitSniffer' && process.platform !== 'darwin'))
+    .filter((id) => !(id === 'windowsApp' && process.platform !== 'win32'))
     .filter((id) => !(id === 'localLlmQwen' && !localLlm.PLATFORM_SUPPORTED))
     .map((id) => {
       const spec = resolveOfficialToolSource(id);
@@ -589,6 +753,9 @@ function getInstallableToolsCatalogRaw() {
         // Ưu tiên ffmpeg do npm (ffmpeg-static) cài sẵn đúng HĐH; bin/ffmpeg(.exe) chỉ là phương án dự phòng
         const ff = getFfmpegPath();
         return { ...spec, os: process.platform, arch: process.arch, installed: Boolean(ff && fs.existsSync(ff)), activePath: ff, currentSizeBytes: 0 };
+      }
+      if (id === 'windowsApp') {
+        return { ...spec, os: process.platform, arch: process.arch, installed: isWindowsAppInstalled(), currentSizeBytes: 0 };
       }
       if (id === 'pythonCore') {
         // Môi trường Python độc lập với model: người dùng có thể cài Python nhưng không cài Whisper
@@ -853,6 +1020,8 @@ function startToolInstallJob({ toolId, userConfirmed = false, qwenLocation = nul
             if (total > 0) job.progress = Math.min(85, 40 + Math.round((dl / total) * 45));
           }
         );
+      } else if (spec.archiveType === 'webview2_app') {
+        await installWindowsApp(job);
       } else if (spec.archiveType === 'mlx_llm' || spec.archiveType === 'llamacpp_llm') {
         await installLocalLlm(job);
       } else if (spec.archiveType === 'vieneu_python') {

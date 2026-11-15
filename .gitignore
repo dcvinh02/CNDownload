@@ -66,3 +66,9 @@ QwenLocal/
 
 # Lựa chọn thành phần lúc cài (riêng từng máy)
 config/setup_choices.json
+
+# Ứng dụng Windows dựng trên máy người dùng (setup → "Ứng dụng Windows")
+CNVideoScraperPro.exe
+CNVideoScraperPro.exe.config
+CNVideoScraperPro.exe.new
+bin/windows_app/

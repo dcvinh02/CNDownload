@@ -34,7 +34,7 @@ const QWEN_DIR_ARG = (Array.from(args).find((a) => a.startsWith('--qwen-dir=')) 
 const INTERACTIVE = !YES && Boolean(process.stdin.isTTY);
 
 // Thứ tự hỏi: công cụ tải video → nền tảng AI → model lồng tiếng → tùy chọn → AI dịch (lớn nhất, cuối cùng)
-const ORDER = ['ytdlp', 'ffmpeg', 'webkitSniffer', 'pythonCore', 'localAsrSmall', 'vieneuTts', 'voiceSeparation', 'localTts', 'speakerDiarization', 'localLlmQwen'];
+const ORDER = ['windowsApp', 'ytdlp', 'ffmpeg', 'webkitSniffer', 'pythonCore', 'localAsrSmall', 'vieneuTts', 'voiceSeparation', 'localTts', 'speakerDiarization', 'localLlmQwen'];
 
 let rl = null;
 function ask(q) {
@@ -259,7 +259,10 @@ async function main() {
   } catch (_) {}
 
   console.log('\n========================================');
-  if (failed.length === 0) console.log('🎉 Cài đặt hoàn tất. Chạy ứng dụng: npm start  (Windows: Start_App_Windows.bat)');
+  if (failed.length === 0)
+    console.log(
+      `🎉 Cài đặt hoàn tất. Chạy ứng dụng: ${process.platform === 'win32' && fs.existsSync('CNVideoScraperPro.exe') ? 'CNVideoScraperPro.exe (hoặc lối tắt trên Desktop)' : 'npm start  (Windows: Start_App_Windows.bat)'}`
+    );
   else console.log(`⚠️  ${failed.length} thành phần lỗi: ${failed.map((t) => t.id).join(', ')}. Có thể chạy lại lệnh này để thử tiếp.`);
   process.exit(failed.length ? 1 : 0);
 }

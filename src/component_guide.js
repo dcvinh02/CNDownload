@@ -16,6 +16,7 @@ const IS_WIN = process.platform === 'win32';
 
 /** Dung lượng chiếm trên đĩa đo thực tế sau khi cài (MB). */
 const DISK_MB = {
+  windowsApp: 1.2,
   pythonCore: 370,
   ytdlp: 36,
   ffmpeg: 44,
@@ -39,6 +40,7 @@ const REQUIRES = {
 };
 
 const PURPOSE = {
+  windowsApp: 'Mở app như một phần mềm độc lập: file CNVideoScraperPro.exe có cửa sổ riêng (không mở Edge, không có cửa sổ dòng lệnh đen), đóng cửa sổ là tắt hẳn. Lối tắt Desktop trỏ vào file này.',
   pythonCore: 'Nền tảng chạy các mô hình AI trên máy (nhận dạng giọng nói, tách giọng, giọng đọc). Không cài vẫn TẢI VIDEO được, nhưng không dùng được "Phân đoạn & Dịch" và "Lồng tiếng".',
   ytdlp: 'Công cụ tải video chính (Bilibili, YouTube, Youku, WeTV…) và tải hàng loạt.',
   ffmpeg: 'Ghép hình + tiếng, chuyển đổi định dạng, xuất video lồng tiếng.',
@@ -102,6 +104,8 @@ function machineContext(extra = {}) {
 function recommend(id, ctx) {
   const sel = ctx.selected || new Set();
   switch (id) {
+    case 'windowsApp':
+      return { level: 'recommended', text: 'Nên cài — rất nhẹ (~1 MB), giúp mở app như phần mềm bình thường thay vì cửa sổ Edge.' };
     case 'ytdlp':
     case 'ffmpeg':
       return { level: 'required', text: 'Nên cài — cần cho chức năng tải video cơ bản.' };
