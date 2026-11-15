@@ -430,6 +430,14 @@
               </select>
             </div>
             <div class="dub-ctrl-col" style="max-width:210px;">
+              <div style="font-size:12px;font-weight:700;margin-bottom:5px;">Ngôn ngữ đầu vào (video gốc):</div>
+              <select id="dubInputLangSelect" class="folder-input" style="height:36px;" title="Tiếng Anh dùng module chia câu riêng; tiếng Trung giữ nguyên cách xử lý hiện tại">
+                <option value="auto">🌐 Tự động nhận diện</option>
+                <option value="zh">🇨🇳 Tiếng Trung</option>
+                <option value="en">🇺🇸 Tiếng Anh (module riêng)</option>
+              </select>
+            </div>
+            <div class="dub-ctrl-col" style="max-width:210px;">
               <div style="font-size:12px;font-weight:700;margin-bottom:5px;">2. Ngôn ngữ đầu ra:</div>
               <select id="dubTargetLangSelect" class="folder-input" style="height:36px;" onchange="onChangeDubLanguage()">
                 <option value="vi">Tiếng Việt (Vietnamese)</option>

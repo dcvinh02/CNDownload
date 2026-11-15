@@ -481,7 +481,7 @@ function createServer() {
 
   app.post('/api/dubbing/extract-script', async (req, res) => {
     try {
-      const { videoPath, targetLang, customSegments, cloudConsent, translationProvider, translationStyle, aiModel, autoDiarize, numSpeakers } =
+      const { videoPath, targetLang, customSegments, cloudConsent, translationProvider, translationStyle, aiModel, autoDiarize, numSpeakers, inputLang } =
         req.body || {};
       const out = await extractAndPrepareSegments(videoPath, targetLang || 'vi', customSegments, {
         cloudConsent: Boolean(cloudConsent),
@@ -489,7 +489,8 @@ function createServer() {
         translationStyle,
         aiModel,
         autoDiarize: autoDiarize === true,
-        numSpeakers
+        numSpeakers,
+        inputLang
       });
       res.json({ success: true, ...out });
     } catch (err) {

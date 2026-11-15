@@ -70,6 +70,16 @@ const STYLE_NOTES = {
 
 const LANG_EN = { zh: 'Chinese', vi: 'Vietnamese', en: 'English', ja: 'Japanese', ko: 'Korean' };
 
+// Chỉ thêm khi ngôn ngữ nguồn là TIẾNG ANH (video tiếng Trung không bị ảnh hưởng)
+const ENGLISH_SOURCE_NOTES = [
+  'Lưu ý riêng cho nguồn tiếng Anh:',
+  '- Bỏ các từ đệm vô nghĩa khi nói (um, uh, like, you know, I mean, basically, actually khi chỉ để đệm) nhưng giữ đủ ý.',
+  '- Tên người, thương hiệu, sản phẩm, tên kênh và thuật ngữ đã quen dùng trong tiếng Việt (iPhone, YouTube, review, AI, vlog...) giữ nguyên tiếng Anh; KHÔNG phiên âm Hán-Việt.',
+  '- Xưng hô kiểu vlog: "I" → "mình/tôi", "you/you guys" khi nói với người xem → "các bạn"; chọn theo ngữ cảnh, thống nhất trong cả video.',
+  '- Giữ nguyên số liệu và đơn vị như câu gốc (không tự quy đổi dặm, pound, °F...).',
+  '- Câu tiếng Việt thường dài hơn câu tiếng Anh: diễn đạt gọn để vừa thời lượng đoạn.'
+].join('\n');
+
 // Tốc độ đọc TTS tham chiếu (âm tiết hoặc từ mỗi giây) để gợi ý độ dài câu dịch.
 const SPEECH_UNITS_PER_SEC = { vi: 5.0, zh: 4.5, en: 2.8, ja: 7.0, ko: 6.0 };
 
@@ -122,6 +132,7 @@ function buildUserPayload(chunk, ctxBefore, ctxAfter, sourceLang, targetLang, st
   const lines = [
     `Ngôn ngữ nguồn: ${LANG_NAMES_VI[sourceLang] || sourceLang}. Ngôn ngữ đích: ${LANG_NAMES_VI[targetLang] || targetLang}.`,
     STYLE_NOTES[style] || STYLE_NOTES.natural,
+    ...(sourceLang === 'en' ? [ENGLISH_SOURCE_NOTES] : []),
     `Trường "max_length_hint" là độ dài gợi ý tối đa để giọng đọc TTS vừa thời lượng (end - start) của đoạn. Ưu tiên câu gọn, nhưng KHÔNG được lược bỏ ý quan trọng.`,
     `Chỉ điền trường "translated_text" cho từng phân đoạn; id, start, end, speaker_id giữ nguyên giá trị. Để tiết kiệm độ dài, KHÔNG cần chép lại "source_text" và "max_length_hint" trong kết quả. Trả về một đối tượng JSON duy nhất dạng {"segments": [{"id": ..., "start": ..., "end": ..., "speaker_id": "...", "translated_text": "..."}]} với đúng ${chunk.length} phân đoạn, đúng thứ tự.`
   ];

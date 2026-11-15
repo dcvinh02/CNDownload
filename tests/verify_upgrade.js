@@ -1058,6 +1058,72 @@ async function main() {
     assert(other.status === 404, 'không được mở file ngoài thư mục lưu không phải đầu ra lồng tiếng');
     return `${path.basename(j.outputPath)} trong "${path.basename(outDir)}" • ${j.logs.length} dòng nhật ký [user] • xem thử HTTP 206`;
   });
+  const runExtract = async (params) => {
+    const t0 = dub.startExtractTask(params);
+    for (let i = 0; i < 600; i++) {
+      const t = dub.getExtractTask(t0.taskId);
+      if (t.status !== 'running') return t;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    throw new Error('quá thời gian');
+  };
+  await check('Ngôn ngữ đầu vào: tiếng Trung giữ nguyên kết quả (Tự động = ép Tiếng Trung), không dùng module tiếng Anh', async () => {
+    if (!fs.existsSync(syncVideo)) throw skip('Không tạo được video thử tiếng Trung.', true);
+    // targetLang 'zh' = cùng ngôn ngữ nguồn → không cần bộ dịch, chỉ so kết quả nhận dạng & chia câu
+    const a = await runExtract({ videoPath: syncVideo, targetLang: 'zh', inputLang: 'auto' });
+    const b = await runExtract({ videoPath: syncVideo, targetLang: 'zh', inputLang: 'zh' });
+    assert(a.status === 'completed' && b.status === 'completed', `${a.status}/${b.status} ${(a.errors || []).concat(b.errors || []).join(' ')}`);
+    const key = (t) => JSON.stringify(t.result.segments.map((x) => [x.startSec, x.endSec, x.sourceText]));
+    assert(a.result.detectedSourceLang === 'zh' && !a.result.englishModule && !b.result.englishModule, 'tiếng Trung không được dùng module tiếng Anh');
+    assert(key(a) === key(b), `Tự động khác ép Tiếng Trung:\n${key(a)}\n${key(b)}`);
+    return `${a.result.segments.length} đoạn, Tự động = Tiếng Trung (giống hệt)`;
+  });
+  await check('Module tiếng Anh: câu ngắt ở dấu phẩy không bị chia vụn, viết tắt "Mr."/"3.5" không bị tách, 3 câu cách nhau 1–1,5 s vẫn riêng & đúng thời điểm', async () => {
+    const enDir = path.join(TMP, 'en');
+    fs.mkdirSync(enDir, { recursive: true });
+    const lines = ['Hi everyone, welcome back to my channel.', 'Mr. Smith bought 3.5 kilos of apples yesterday.', 'Honestly, the coffee tastes amazing, but it is a little noisy.'];
+    const haveSamantha = process.platform === 'darwin' && spawnSync('say', ['-v', '?'], { encoding: 'utf8' }).stdout.includes('Samantha');
+    let clips = [];
+    let voice = '';
+    if (haveSamantha) {
+      clips = lines.map((t, i) => {
+        const f = path.join(enDir, `e${i}.aiff`);
+        spawnSync('say', ['-v', 'Samantha', '-o', f, t]);
+        return f;
+      });
+      voice = 'macOS Samantha';
+    } else if (fs.existsSync(PY_CORE)) {
+      clips = lines.map((t, i) => {
+        const f = path.join(enDir, `e${i}.mp3`);
+        spawnSync(PY_CORE, ['-m', 'edge_tts', '--voice', 'en-US-JennyNeural', '--text', t, '--write-media', f], { timeout: 60000, windowsHide: true });
+        return f;
+      });
+      voice = 'edge-tts en-US-JennyNeural';
+    }
+    if (clips.length !== 3 || !clips.every((f) => fs.existsSync(f) && fs.statSync(f).size > 1000)) throw skip('Không tạo được giọng tiếng Anh mẫu (cần macOS Samantha hoặc edge-tts + Internet).', true);
+    const truth = [1.0, 6.0, 11.5].map((t, i) => Number((t + (onsetsOf(clips[i], -38)[0] || 0)).toFixed(3)));
+    const enVideo = path.join(enDir, 'en_test.mp4');
+    ff([
+      '-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=mono:d=17',
+      '-i', clips[0], '-i', clips[1], '-i', clips[2],
+      '-filter_complex', '[1:a]aresample=48000,adelay=1000|1000[a1];[2:a]aresample=48000,adelay=6000|6000[a2];[3:a]aresample=48000,adelay=11500|11500[a3];[0:a][a1][a2][a3]amix=inputs=4:normalize=0:duration=first[a]',
+      '-map', '[a]', '-ac', '1', path.join(enDir, 'orig.wav')
+    ]);
+    ff(['-f', 'lavfi', '-i', 'testsrc=size=320x240:rate=25:duration=17', '-i', path.join(enDir, 'orig.wav'), '-c:v', 'mpeg4', '-q:v', '5', '-c:a', 'aac', '-shortest', enVideo]);
+    const t = await runExtract({ videoPath: enVideo, targetLang: 'en', inputLang: 'auto' });
+    assert(t.status === 'completed', `${t.status} ${(t.errors || []).join(' ')}`);
+    const segs = t.result.segments;
+    const desc = segs.map((x) => `[${x.startSec}] ${x.sourceText}`).join(' | ');
+    assert(t.result.detectedSourceLang === 'en' && t.result.englishModule, 'Tự động phải nhận ra tiếng Anh và dùng module tiếng Anh');
+    assert(segs.length === 3, `phải đúng 3 câu: ${desc}`);
+    assert(/everyone/i.test(segs[0].sourceText) && /channel/i.test(segs[0].sourceText), `câu 1 bị chia vụn: ${desc}`);
+    assert(/Mr\.?\s*Smith/i.test(segs[1].sourceText) && /yesterday/i.test(segs[1].sourceText), `câu 2 bị tách sai ở viết tắt: ${desc}`);
+    assert(/honestly/i.test(segs[2].sourceText) && /noisy/i.test(segs[2].sourceText), `câu 3 bị chia vụn: ${desc}`);
+    segs.forEach((x, i) => assert(Math.abs(x.startSec - truth[i]) <= 0.3, `câu ${i + 1} lệch ${(x.startSec - truth[i]).toFixed(2)} s`));
+    const tEn = await runExtract({ videoPath: enVideo, targetLang: 'en', inputLang: 'en' });
+    assert(tEn.status === 'completed' && tEn.result.englishModule && tEn.result.segments.length === 3, 'ép Tiếng Anh phải cho cùng kết quả');
+    return `[${voice}] ${desc} • lệch tối đa ${Math.max(...segs.map((x, i) => Math.abs(x.startSec - truth[i]))).toFixed(2)} s`;
+  });
   await check('/api/ai/config không trả về API Key', async () => {
     const r = await req('GET', '/api/ai/config');
     assert(r.status === 200 && !r.body.includes('TEST-KEY-1234567890'), 'lộ key');

@@ -823,17 +823,34 @@ def cmd_transcribe_and_translate(args):
         }
 
     model = WhisperModel(asr_dir, device="cpu", compute_type="int8", cpu_threads=4)
-    segments_gen, info = model.transcribe(
-        audio_path,
-        beam_size=4,
-        word_timestamps=True,
-        vad_filter=True,
-        vad_parameters=dict(min_silence_duration_ms=350, speech_pad_ms=200),
-        condition_on_previous_text=False,
-    )
+    # Ngôn ngữ đầu vào người dùng chọn: auto | zh | en
+    input_lang = (getattr(args, "input_lang", "auto") or "auto").strip().lower()[:4]
+    english_mode = False
+    if input_lang == "en":
+        import asr_english
+
+        segments_gen, info = asr_english.transcribe_english(model, audio_path)
+        english_mode = True
+    else:
+        segments_gen, info = model.transcribe(
+            audio_path,
+            beam_size=4,
+            word_timestamps=True,
+            vad_filter=True,
+            vad_parameters=dict(min_silence_duration_ms=350, speech_pad_ms=200),
+            condition_on_previous_text=False,
+            **({"language": "zh"} if input_lang == "zh" else {}),
+        )
+    detected_lang0 = (getattr(info, "language", "") or "").lower()
+    if not english_mode and input_lang == "auto" and detected_lang0.startswith("en"):
+        # Tự động nhận ra tiếng Anh → dùng module tiếng Anh riêng (generator chưa chạy nên không tốn thêm lượt nhận dạng)
+        import asr_english
+
+        segments_gen, info = asr_english.transcribe_english(model, audio_path)
+        english_mode = True
     # Whisper hay trộn chữ phồn thể/giản thể với tiếng Phổ thông. Ngôn ngữ đã được nhận diện trước khi giải mã
     # (generator chưa chạy), nên với "zh" ta tạo lại generator kèm gợi ý giản thể — không tốn thêm lượt nhận dạng.
-    if (getattr(info, "language", "") or "").lower().startswith("zh"):
+    if not english_mode and (input_lang == "zh" or detected_lang0.startswith("zh")):
         segments_gen, info = model.transcribe(
             audio_path,
             beam_size=4,
@@ -852,7 +869,10 @@ def cmd_transcribe_and_translate(args):
             emit_progress({"stage": "asr", "pos": round(float(s.end), 2), "total": round(total_dur, 2)})
         if getattr(s, "no_speech_prob", 0.0) > 0.88 and len((s.text or "").strip()) < 2:
             continue
-        raw_list.extend(split_segment_by_sentences(s))
+        if english_mode:
+            raw_list.extend(asr_english.split_english_segment(s))
+        else:
+            raw_list.extend(split_segment_by_sentences(s))
 
     # Nếu vad_filter quá chặt trên clip ngắn, thử lại không có vad_filter — NHƯNG chỉ khi VAD (ngưỡng nới lỏng)
     # vẫn thấy có tiếng nói. Không có bước này, Whisper "bịa" chữ trên nhạc/âm đơn (thấy trên CPU x86 Windows).
@@ -875,6 +895,7 @@ def cmd_transcribe_and_translate(args):
             vad_filter=False,
             no_speech_threshold=0.65,
             condition_on_previous_text=False,
+            **({"language": "en"} if english_mode else {"language": "zh"} if input_lang == "zh" else {}),
         )
         info = info2
         for s in segments_gen2:
@@ -885,7 +906,10 @@ def cmd_transcribe_and_translate(args):
                 continue
             raw_list.append({"start": s.start, "end": s.end, "text": (s.text or "").strip()})
 
-    merged_segments = merge_and_clean_asr_segments(raw_list, getattr(info, "duration", 0.0) or 0.0)
+    if english_mode:
+        merged_segments = asr_english.merge_english_segments(raw_list, getattr(info, "duration", 0.0) or 0.0)
+    else:
+        merged_segments = merge_and_clean_asr_segments(raw_list, getattr(info, "duration", 0.0) or 0.0)
     merged_segments = refine_segment_starts(audio_path, merged_segments)
     total_chars = sum(len(x["sourceText"]) for x in merged_segments)
     if not merged_segments or total_chars < 1:
@@ -998,7 +1022,9 @@ def cmd_transcribe_and_translate(args):
             "probability": detected_prob,
         },
         "totalDuration": round(float(getattr(info, "duration", 0.0) or 0.0), 2),
-        "asrModelUsed": f"Faster-Whisper ({model_name}, int8 CPU Local)",
+        "asrModelUsed": f"Faster-Whisper ({model_name}, int8 CPU Local){' • module tiếng Anh' if english_mode else ''}",
+        "inputLangMode": input_lang,
+        "englishModule": english_mode,
         "translationMode": translation_mode,
         "usedCloudTranslation": used_cloud,
         "speakerCount": speaker_count,
@@ -1300,6 +1326,7 @@ def main():
     p_asr.add_argument("--cloud-model", default="")
     p_asr.add_argument("--cloud-base-url", default="")
     p_asr.add_argument("--skip-translation", default="0")
+    p_asr.add_argument("--input-lang", default="auto")
     p_asr.add_argument("--diarize", default="0")
     p_asr.add_argument("--diar-dir", default="")
     p_asr.add_argument("--num-speakers", default="-1")

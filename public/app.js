@@ -1879,6 +1879,7 @@ async function extractScriptFromSelectedVideo() {
         videoPath,
         source: src.source,
         targetLang,
+        inputLang: document.getElementById('dubInputLangSelect')?.value || 'auto',
         autoDiarize: Boolean(document.getElementById('dubAutoDiarizeCheck')?.checked),
         numSpeakers: parseInt(document.getElementById('dubNumSpeakersInput')?.value || '0', 10) || 0,
         ...trParams
@@ -1941,6 +1942,7 @@ async function resumeExtractTaskUi() {
       body: JSON.stringify({
         taskId: t.taskId,
         targetLang: document.getElementById('dubTargetLangSelect')?.value || 'vi',
+        inputLang: document.getElementById('dubInputLangSelect')?.value || 'auto',
         ...trParams
       })
     });
@@ -2408,6 +2410,7 @@ async function startDubbingProcess() {
       body: JSON.stringify({
         videoPath,
         source: dubSrc.source,
+        inputLang: document.getElementById('dubInputLangSelect')?.value || 'auto',
         outputDir: dubSrc.outputDir || undefined,
         targetLang,
         voiceId,
