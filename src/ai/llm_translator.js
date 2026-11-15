@@ -327,7 +327,7 @@ async function translateChunk(chunk, ctxBefore, ctxAfter, opts, stats, depth = 0
  * @param {Array<{index?:number,startSec:number,endSec:number,sourceText:string,speakerId?:string}>} segments
  * @returns {Promise<{translations:string[], mode:string, usedCloud:true, stats:object}>}
  */
-async function translateSegmentsWithLLM(segments, { sourceLang, targetLang, style = 'natural', providerId, model, signal, onProgress, allowCloud = true, useCache = true } = {}) {
+async function translateSegmentsWithLLM(segments, { sourceLang, targetLang, style = 'natural', providerId, model, signal, onProgress, onChunk, allowCloud = true, useCache = true } = {}) {
   const items = (segments || []).map((s, idx) => ({
     id: Number(s.id ?? s.index ?? idx + 1) || idx + 1,
     start: Number(Number(s.startSec ?? s.start ?? 0).toFixed(3)),
@@ -378,6 +378,12 @@ async function translateSegmentsWithLLM(segments, { sourceLang, targetLang, styl
       translations[segIdx] = texts[k];
     });
     done += idxList.length;
+    // Báo từng lô đã dịch xong (vị trí trong mảng `segments` + bản dịch) để lưu tiến độ, chạy tiếp được nếu lô sau lỗi
+    if (typeof onChunk === 'function') {
+      try {
+        onChunk(idxList.slice(), texts.slice(), stats);
+      } catch (_) {}
+    }
     if (typeof onProgress === 'function') onProgress(done, toTranslateIdx.length);
   }
 

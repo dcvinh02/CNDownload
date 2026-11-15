@@ -22,6 +22,7 @@ const { isProviderReady, resolveFeatureTarget, redactSecrets, isLocalProvider } 
 // Định dạng chuẩn cho mọi đoạn giọng đọc trước khi dựng timeline
 const DUB_SAMPLE_RATE = 48000;
 const VIENEU_ID_PREFIX = 'vieneu:';
+const DEFAULT_VIENEU_VOICE = 'Ngọc Huyền'; // giọng lồng tiếng mặc định (theo yêu cầu người dùng)
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const VENV_PYTHON = path.join(
@@ -701,6 +702,9 @@ function snapshotJob(job) {
     dubVolume: job.dubVolume,
     autoDucking: job.autoDucking,
     warnings: job.warnings,
+    source: job.source || 'download',
+    outputDir: job.outputDir || null,
+    logs: (job.logs || []).slice(-150),
     createdAt: job.createdAt,
     finishedAt: job.finishedAt,
     resumeParams: job.resumeParams || null
@@ -826,6 +830,7 @@ function getVieneuVoiceEntries() {
       }
     ];
   }
+  const preferredVoice = st.voices.some(([, v]) => v === DEFAULT_VIENEU_VOICE) ? DEFAULT_VIENEU_VOICE : st.defaultVoice;
   return st.voices.map(([label, vid]) => {
     // Nhãn SDK dạng: "⭐ Hải Đăng — Nam · Bắc · Phong cách tự nhiên"
     const cleanLabel = String(label || vid).replace(/^⭐\s*/, '').trim();
@@ -839,7 +844,7 @@ function getVieneuVoiceEntries() {
       name: `${vid}${rest.length ? ` (${rest.join(' · ')})` : ''} — VieNeu-TTS 48 kHz`,
       gender,
       featured: String(label || '').startsWith('⭐'),
-      isDefaultRecommended: vid === st.defaultVoice
+      isDefaultRecommended: vid === preferredVoice
     };
   });
 }
@@ -1184,6 +1189,13 @@ async function translateSegmentList(segments, sourceLang, targetLang, options = 
         model: options.aiModel || undefined,
         signal: options.signal,
         onProgress: options.onTranslateProgress,
+        onChunk: (posList, texts) => {
+          posList.forEach((p, k) => {
+            const segIdx = needIdx[p];
+            if (segIdx !== undefined && texts[k]) list[segIdx].translatedText = texts[k];
+          });
+          if (typeof options.onPartial === 'function') options.onPartial(list);
+        },
         allowCloud: Boolean(options.cloudConsent)
       }
     );
@@ -2117,78 +2129,168 @@ async function extractAndPrepareSegments(videoPathOrOpts, targetLang = 'vi', cus
     );
   }
 
-  onStepChange(1, 'Bước 1/5: Đang trích xuất track âm thanh 16kHz từ video bằng FFmpeg...');
-  const tempWavDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cn_asr_extract_'));
-  const extractedWavPath = path.join(tempWavDir, 'extracted_audio_16k.wav');
+  // Checkpoint (tùy chọn): lưu kết quả từng bước để "Chạy tiếp" từ đúng bước bị lỗi, không làm lại từ đầu.
+  //   ckpt.workDir / ckpt.audioReady  → file âm thanh 16 kHz đã tách
+  //   ckpt.asr                         → kết quả nhận dạng (segments chưa dịch, ngôn ngữ, người nói)
+  //   ckpt.translated                  → danh sách phân đoạn có lời dịch (có thể dịch dở)
+  const ckpt = options.checkpoint && typeof options.checkpoint === 'object' ? options.checkpoint : null;
+  const log = typeof options.onLog === 'function' ? options.onLog : () => {};
+  const keepWorkDir = Boolean(ckpt);
+  let workDir = ckpt && ckpt.workDir && fs.existsSync(ckpt.workDir) ? ckpt.workDir : null;
+  if (!workDir) {
+    workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cn_asr_extract_'));
+    if (ckpt) {
+      ckpt.workDir = workDir;
+      ckpt.audioReady = false;
+    }
+  }
+  const extractedWavPath = path.join(workDir, 'extracted_audio_16k.wav');
+  const wantDiarize = options.autoDiarize === true && isDiarizationAvailable();
+  if (options.autoDiarize === true && !wantDiarize) log('warn', 'Đã bật nhận diện người nói nhưng máy chưa cài mô hình phân tách người nói — bỏ qua bước này.');
 
   try {
-    await extractAudioTrackFromVideo(videoPath, extractedWavPath, trackProc);
+    let asr = ckpt && ckpt.asr ? ckpt.asr : null;
+    if (asr) {
+      onStepChange(2, `Dùng lại kết quả nhận dạng giọng nói đã có (${asr.segments.length} đoạn) — bỏ qua tách âm thanh & ASR.`);
+      log('info', `Bỏ qua Bước 1–2: dùng lại kết quả ASR đã lưu (${asr.segments.length} đoạn, ${String(asr.detectedSourceLang || '').toUpperCase()}).`);
+    } else {
+      if (ckpt && ckpt.audioReady && fs.existsSync(extractedWavPath)) {
+        log('info', 'Bỏ qua Bước 1: dùng lại file âm thanh 16 kHz đã tách.');
+      } else {
+        onStepChange(1, 'Bước 1/5: Đang trích xuất track âm thanh 16kHz từ video bằng FFmpeg...');
+        log('info', 'Bước 1: tách track âm thanh 16 kHz bằng FFmpeg...');
+        await extractAudioTrackFromVideo(videoPath, extractedWavPath, trackProc);
+        if (ckpt) ckpt.audioReady = true;
+        log('ok', `Bước 1: đã tách âm thanh (${(fs.statSync(extractedWavPath).size / 1048576).toFixed(1)} MB).`);
+      }
 
-    onStepChange(2, 'Bước 2/5: Đang chạy nhận dạng giọng nói (ASR Faster-Whisper) để tách câu thoại và mốc thời gian...');
-    const asrModelDir = getPreferredAsrModelDir();
-    if (!asrModelDir) {
-      throw new Error(
-        'Chưa cài đặt mô hình nhận dạng giọng nói Local ASR (Faster-Whisper). Vui lòng mở mục Công cụ để tải mô hình.'
+      onStepChange(2, 'Bước 2/5: Đang chạy nhận dạng giọng nói (ASR Faster-Whisper) để tách câu thoại và mốc thời gian...');
+      const asrModelDir = getPreferredAsrModelDir();
+      if (!asrModelDir) {
+        throw new Error(
+          'Chưa cài đặt mô hình nhận dạng giọng nói Local ASR (Faster-Whisper). Vui lòng mở mục Công cụ để tải mô hình.'
+        );
+      }
+
+      // Dịch bằng AI Provider (Gemini/OpenAI/Qwen) chạy ở Node -> worker chỉ nhận dạng (skip translation)
+      const translateInNode = isAiTranslationProvider(effectiveProvider);
+      const workerArgs = [
+        'transcribe_and_translate',
+        '--audio',
+        extractedWavPath,
+        '--asr-dir',
+        asrModelDir,
+        '--argos-dir',
+        ARGOS_MODELS_DIR,
+        '--target-lang',
+        targetLang,
+        '--cloud-consent',
+        cloudConsent ? '1' : '0',
+        '--translation-provider',
+        translateInNode ? 'local' : effectiveProvider,
+        '--translation-style',
+        translationStyle,
+        '--skip-translation',
+        translateInNode ? '1' : '0'
+      ];
+      // Nhận diện người nói: CHỈ chạy khi người dùng bật (mặc định tắt)
+      if (wantDiarize) {
+        const n = Math.floor(Number(options.numSpeakers) || 0);
+        workerArgs.push('--diarize', '1', '--diar-dir', DIARIZATION_DIR, '--num-speakers', String(n > 0 ? n : -1));
+        onStepChange(2, 'Bước 2/5: Đang nhận dạng giọng nói (ASR) và phân tách người nói...');
+      }
+      log('info', `Bước 2: nhận dạng giọng nói bằng ${path.basename(asrModelDir)}${wantDiarize ? ' + phân tách người nói' : ' (không nhận diện người nói)'}...`);
+
+      // Timeout theo độ dài âm thanh (CPU int8 ~ 0.3–1.5x thời gian thực tùy model)
+      const asrTimeout = Math.max(240000, Math.round(mediaInfo.duration * 3000) + 120000);
+      let lastAsrLogPct = 0;
+      const workerRes = await runLocalAiWorker(workerArgs, trackProc, asrTimeout, null, (p) => {
+        if (p && p.stage === 'asr' && p.total > 0) {
+          onSubProgress(2, p.pos, p.total);
+          const pct = Math.floor((p.pos / p.total) * 4) * 25;
+          if (pct > lastAsrLogPct && pct < 100) {
+            lastAsrLogPct = pct;
+            log('info', `ASR: đã nghe ${pct}% âm thanh.`);
+          }
+        } else if (p && p.stage === 'diarize' && p.total > 0) onSubProgress('diarize', p.done, p.total);
+        else if (p && p.warning) {
+          onSubProgress('warning', p.warning, 0);
+          log('warn', p.warning);
+        }
+      });
+
+      const asrPayload = workerRes && workerRes.ok ? workerRes : workerRes && workerRes.partialAsr ? workerRes.partialAsr : null;
+      if (!asrPayload) {
+        throw new Error(
+          (workerRes && workerRes.error) ||
+            'Nhận dạng giọng nói hoặc dịch lời thoại thất bại. Không phát hiện được lời thoại hợp lệ trong video.'
+        );
+      }
+      asr = {
+        detectedSourceLang: asrPayload.detectedSourceLang || 'zh',
+        languageProbability: asrPayload.languageProbability || 0,
+        sourceLangName: (asrPayload.sourceLang && asrPayload.sourceLang.name) || '',
+        asrModelUsed: asrPayload.asrModelUsed || 'Faster-Whisper Local',
+        speakerCount: asrPayload.speakerCount || 1,
+        diarization: asrPayload.diarization || (wantDiarize ? null : { ok: false, skipped: true }),
+        segments: sanitizeSegments(asrPayload.segments).map((x) => ({ ...x, translatedText: '' }))
+      };
+      if (ckpt) ckpt.asr = asr;
+      log(
+        'ok',
+        `Bước 2: nhận dạng ${asr.segments.length} đoạn thoại • ngôn ngữ ${asr.detectedSourceLang.toUpperCase()} (${Math.round(asr.languageProbability * 100)}%)` +
+          `${asr.diarization && asr.diarization.ok ? ` • ${asr.speakerCount} người nói` : ''}.`
       );
+      if (asr.diarization && asr.diarization.ok === false && asr.diarization.error) log('warn', asr.diarization.error);
+
+      if (workerRes.ok && !translateInNode) {
+        // Bộ dịch Offline/Google chạy ngay trong worker cùng lúc ASR
+        const done = sanitizeSegments(workerRes.segments);
+        if (ckpt) ckpt.translated = done;
+        if (ckpt) ckpt.translationMode = workerRes.translationMode || '';
+        if (ckpt) ckpt.usedCloud = Boolean(workerRes.usedCloudTranslation);
+        log('ok', `Bước 3: ${workerRes.translationMode || 'đã dịch'} (${done.filter((x) => x.translatedText).length}/${done.length} đoạn).`);
+      } else if (!workerRes.ok) {
+        // ASR xong nhưng dịch lỗi: đã lưu ASR — lần "Chạy tiếp" chỉ dịch lại
+        onStepChange(3, 'Bước 3/5: Dịch lời thoại thất bại.');
+        throw new Error(workerRes.error || 'Dịch lời thoại thất bại.');
+      }
     }
 
-    // Dịch bằng AI Provider (Gemini/OpenAI) chạy ở Node -> worker chỉ nhận dạng (skip translation)
-    const translateInNode = isAiTranslationProvider(effectiveProvider);
-    const workerArgs = [
-      'transcribe_and_translate',
-      '--audio',
-      extractedWavPath,
-      '--asr-dir',
-      asrModelDir,
-      '--argos-dir',
-      ARGOS_MODELS_DIR,
-      '--target-lang',
-      targetLang,
-      '--cloud-consent',
-      cloudConsent ? '1' : '0',
-      '--translation-provider',
-      translateInNode ? 'local' : effectiveProvider,
-      '--translation-style',
-      translationStyle,
-      '--skip-translation',
-      translateInNode ? '1' : '0'
-    ];
-    // Tự nhận diện người nói (mặc định bật khi đã có mô hình)
-    const wantDiarize = options.autoDiarize !== false && isDiarizationAvailable();
-    if (wantDiarize) {
-      const n = Math.floor(Number(options.numSpeakers) || 0);
-      workerArgs.push('--diarize', '1', '--diar-dir', DIARIZATION_DIR, '--num-speakers', String(n > 0 ? n : -1));
-      onStepChange(2, 'Bước 2/5: Đang nhận dạng giọng nói (ASR) và phân tách người nói...');
-    }
+    const detectedCode = asr.detectedSourceLang || 'zh';
+    let segments = (ckpt && ckpt.translated) || asr.segments.map((x) => ({ ...x }));
+    let translationMode = (ckpt && ckpt.translationMode) || 'Offline Local NMT';
+    let usedCloudTranslation = Boolean(ckpt && ckpt.usedCloud);
+    let translationStats = (ckpt && ckpt.translationStats) || null;
 
-    // Timeout theo độ dài âm thanh (CPU int8 ~ 0.3–1.5x thời gian thực tùy model)
-    const asrTimeout = Math.max(240000, Math.round(mediaInfo.duration * 3000) + 120000);
-    const workerRes = await runLocalAiWorker(workerArgs, trackProc, asrTimeout, null, (p) => {
-      if (p && p.stage === 'asr' && p.total > 0) onSubProgress(2, p.pos, p.total);
-      else if (p && p.stage === 'diarize' && p.total > 0) onSubProgress('diarize', p.done, p.total);
-      else if (p && p.warning) onSubProgress('warning', p.warning, 0);
-    });
-
-    if (!workerRes || !workerRes.ok) {
-      throw new Error(
-        (workerRes && workerRes.error) ||
-          'Nhận dạng giọng nói hoặc dịch lời thoại thất bại. Không phát hiện được lời thoại hợp lệ trong video.'
-      );
-    }
-
-    const detectedCode = workerRes.detectedSourceLang || 'zh';
-    let segments = sanitizeSegments(workerRes.segments);
-    let translationMode = workerRes.translationMode || 'Offline Local NMT';
-    let usedCloudTranslation = Boolean(workerRes.usedCloudTranslation);
-    let translationStats = null;
-
-    if (translateInNode) {
-      onStepChange(3, `Bước 3/5: Đang dịch ${segments.length} đoạn thoại bằng AI (giữ nguyên ID & timestamp)...`);
-      const tr = await translateSegmentList(segments, detectedCode, targetLang, { ...trOptions, onlyMissing: false });
+    const missingCount = segments.filter((x) => String(x.sourceText || '').trim() && !String(x.translatedText || '').trim()).length;
+    if (missingCount > 0) {
+      const resumed = segments.length - missingCount;
+      onStepChange(3, `Bước 3/5: Đang dịch ${missingCount} đoạn thoại${resumed > 0 ? ` (đã có ${resumed} đoạn dịch từ lần trước)` : ''} (giữ nguyên ID & timestamp)...`);
+      log('info', `Bước 3: dịch ${missingCount} đoạn bằng "${effectiveProvider}"${options.aiModel ? ` • model ${options.aiModel}` : ''}${resumed > 0 ? ` — chạy tiếp, giữ ${resumed} đoạn đã dịch` : ''}.`);
+      const tr = await translateSegmentList(segments, detectedCode, targetLang, {
+        ...trOptions,
+        onlyMissing: true,
+        onPartial: (list) => {
+          if (ckpt) ckpt.translated = list.map((x) => ({ ...x }));
+        },
+        onTranslateProgress: (d, t) => {
+          onSubProgress(3, d, t);
+          log('info', `Dịch: xong ${d}/${t} đoạn.`);
+        }
+      });
       segments = tr.segments;
       translationMode = tr.mode;
-      usedCloudTranslation = Boolean(tr.usedCloud);
-      translationStats = tr.stats;
+      usedCloudTranslation = usedCloudTranslation || Boolean(tr.usedCloud);
+      translationStats = tr.stats || translationStats;
+      if (ckpt) {
+        ckpt.translated = segments.map((x) => ({ ...x }));
+        ckpt.translationMode = translationMode;
+        ckpt.usedCloud = usedCloudTranslation;
+        ckpt.translationStats = translationStats;
+      }
+      if (tr.stats && Array.isArray(tr.stats.fallbacks) && tr.stats.fallbacks.length) log('warn', `Dịch: đã dùng dự phòng ${Array.from(new Set(tr.stats.fallbacks)).join(', ')}.`);
+      log('ok', `Bước 3: ${translationMode}.`);
     }
 
     onStepChange(
@@ -2198,33 +2300,41 @@ async function extractAndPrepareSegments(videoPathOrOpts, targetLang = 'vi', cus
 
     const sourceLangInfo = LANGUAGE_INFO[detectedCode] || {
       code: detectedCode,
-      name: (workerRes.sourceLang && workerRes.sourceLang.name) || `Ngôn ngữ (${detectedCode})`,
+      name: asr.sourceLangName || `Ngôn ngữ (${detectedCode})`,
       flag: '🌐'
     };
+    const untranslatedIds = segments
+      .filter((x) => String(x.sourceText || '').trim() && !String(x.translatedText || '').trim())
+      .map((x) => x.index);
+    if (untranslatedIds.length > 0 && untranslatedIds.length === segments.length) {
+      throw new Error('Không dịch được đoạn thoại nào bằng bộ dịch đã chọn. Hãy đổi bộ dịch (AI/Google) rồi bấm "Chạy tiếp".');
+    }
 
     return {
       totalDuration: Number(mediaInfo.duration.toFixed(2)),
       hasAudio: true,
       sourceLang: {
         ...sourceLangInfo,
-        probability: workerRes.languageProbability || 0
+        probability: asr.languageProbability || 0
       },
       detectedSourceLang: detectedCode,
       targetLang: LANGUAGE_INFO[targetLang] || LANGUAGE_INFO.vi,
-      asrModelUsed: workerRes.asrModelUsed || 'Faster-Whisper Local',
+      asrModelUsed: asr.asrModelUsed,
       translationMode,
       translationNote: translationMode,
       usedCloudTranslation,
       translationStats,
-      untranslatedIds: Array.isArray(workerRes.untranslatedIds) ? workerRes.untranslatedIds : [],
-      speakerCount: workerRes.speakerCount || 1,
-      diarization: workerRes.diarization || (wantDiarize ? null : { ok: false, skipped: true }),
+      untranslatedIds,
+      speakerCount: asr.speakerCount || 1,
+      diarization: asr.diarization,
       segments
     };
   } finally {
-    try {
-      fs.rmSync(tempWavDir, { recursive: true, force: true });
-    } catch (_) {}
+    if (!keepWorkDir) {
+      try {
+        fs.rmSync(workDir, { recursive: true, force: true });
+      } catch (_) {}
+    }
   }
 }
 
@@ -2254,12 +2364,23 @@ function startDubbingJob({
   translationProvider = 'auto',
   translationStyle = 'natural',
   aiModel = '',
-  autoDiarize = true,
+  autoDiarize = false,
   numSpeakers = 0,
-  removeOriginalVoice = true
+  removeOriginalVoice = true,
+  source = 'download'
 }) {
   if (!videoPath || !fs.existsSync(videoPath)) {
     throw new Error('Không tìm thấy file video gốc để lồng tiếng.');
+  }
+  const jobSource = source === 'user' ? 'user' : 'download';
+  if (outputDir) {
+    if (!path.isAbsolute(String(outputDir))) throw new Error('Thư mục đầu ra phải là đường dẫn đầy đủ (vd. /Users/ban/Videos hoặc D:\\Videos).');
+    try {
+      fs.mkdirSync(outputDir, { recursive: true });
+      fs.accessSync(outputDir, fs.constants.W_OK);
+    } catch (e) {
+      throw new Error(`Không ghi được vào thư mục đầu ra "${outputDir}": ${e.code || e.message}`);
+    }
   }
   const jobId = `dub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
   const voiceCfg = resolveVoiceConfig(voiceId, targetLang, { cloudConsent });
@@ -2290,6 +2411,9 @@ function startDubbingJob({
     step: 'Đang khởi tạo quy trình phân tích âm thanh và lồng tiếng...',
     statusText: 'Đang khởi tạo quy trình phân tích âm thanh và lồng tiếng...',
     videoPath,
+    source: jobSource,
+    outputDir: outputDir || null,
+    logs: [],
     inputFileName: videoPath ? path.basename(videoPath) : '',
     outputVideoPath: null,
     outputPath: null,
@@ -2330,8 +2454,14 @@ function startDubbingJob({
   // Tham số để chạy tiếp nếu bị gián đoạn (không chứa API key)
   jobState.resumeParams = {
     videoPath, outputDir, targetLang, voiceId, speakerVoices, originalVolume, dubVolume, autoDucking, duckLevel, maxTempo,
-    customSegments, sourceLang, exportSrt, cloudConsent, translationProvider, translationStyle, aiModel, autoDiarize, numSpeakers, removeOriginalVoice
+    customSegments, sourceLang, exportSrt, cloudConsent, translationProvider, translationStyle, aiModel, autoDiarize, numSpeakers, removeOriginalVoice,
+    source: jobSource
   };
+  const jlog = (level, msg) => {
+    jobState.logs.push({ at: new Date().toISOString(), level, step: jobState.stepIndex, source: jobSource, msg: redactSecrets(String(msg)).slice(0, 500) });
+    if (jobState.logs.length > 300) jobState.logs.splice(0, jobState.logs.length - 300);
+  };
+  jlog('info', `Bắt đầu lồng tiếng • nguồn: ${jobSource} • video: ${videoPath}${outputDir ? ` • đầu ra: ${outputDir}` : ' • đầu ra: thư mục Dubbed/ cạnh video'} • giọng: ${voiceCfg.name}`);
   const persistIv = setInterval(() => {
     persistJobsSoon();
     if (jobState.status !== 'running') clearInterval(persistIv);
@@ -2353,6 +2483,7 @@ function startDubbingJob({
     jobState.stepLabel = stepDef.label;
     jobState.steps = buildStepsProgress(stepDef.index);
     if (message) {
+      if (message !== jobState.step) jlog('info', message);
       jobState.step = message;
       jobState.statusText = message;
     }
@@ -2375,6 +2506,7 @@ function startDubbingJob({
         numSpeakers,
         trackProc,
         signal: abortCtrl.signal,
+        onLog: (lv, m) => jlog(lv, m),
         onStepChange: (sIdx, msg) => {
           const pMap = { 1: 8, 2: 12, 3: 40 };
           setJobStep(sIdx, msg, pMap[sIdx] || jobState.progress);
@@ -2612,6 +2744,8 @@ function startDubbingJob({
       jobState.steps = buildStepsProgress(5, 'completed');
       jobState.step = `Hoàn tất lồng tiếng & xác minh video đầu ra thành công (${((jobState.finishedAt - jobState.startedAt) / 1000).toFixed(1)} giây).`;
       jobState.statusText = jobState.step;
+      jobState.warnings.forEach((w) => jlog('warn', w));
+      jlog('ok', `${jobState.step} • file: ${outVideoPath}`);
     } catch (err) {
       if (!isCancelled()) {
         jobState.status = 'error';
@@ -2620,6 +2754,7 @@ function startDubbingJob({
         jobState.steps = buildStepsProgress(jobState.stepIndex, 'error', jobState.stepIndex);
         jobState.step = `Lỗi tại Bước ${jobState.stepIndex}/5: ${jobState.error}`;
         jobState.statusText = jobState.step;
+        jlog('error', jobState.step);
       }
     } finally {
       try {
@@ -2641,39 +2776,45 @@ const EXTRACT_STAGES = [
   { code: 'validate', label: 'Kiểm tra kết quả trước TTS' }
 ];
 
+const EXTRACT_RESUME_TTL_MS = 6 * 60 * 60 * 1000; // giữ dữ liệu "chạy tiếp" 6 giờ rồi dọn file tạm
+
 function serializeExtractTask(t) {
   if (!t) return null;
-  const { abortCtrl, procs, ...pub } = t;
-  return { ...pub, elapsedSec: Number((((t.finishedAt || Date.now()) - t.startedAt) / 1000).toFixed(1)) };
+  const { abortCtrl, procs, checkpoint, cleanupTimer, ...pub } = t;
+  const ck = checkpoint || {};
+  return {
+    ...pub,
+    logs: (t.logs || []).slice(-300),
+    resumable: t.status !== 'running' && t.status !== 'completed' && Boolean(t.checkpoint),
+    checkpointInfo: {
+      audioReady: Boolean(ck.audioReady),
+      asrSegments: ck.asr ? ck.asr.segments.length : 0,
+      translatedSegments: ck.translated ? ck.translated.filter((x) => String(x.translatedText || '').trim()).length : 0
+    },
+    elapsedSec: Number((((t.finishedAt || Date.now()) - t.startedAt) / 1000).toFixed(1))
+  };
 }
 
-function startExtractTask(params = {}) {
-  const { videoPath } = params;
-  if (!videoPath || !fs.existsSync(videoPath)) throw new Error('Không tìm thấy file video đầu vào trên ổ đĩa.');
-  const taskId = `extract_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-  const task = {
-    taskId,
-    videoPath,
-    inputFileName: path.basename(videoPath),
-    status: 'running', // running | completed | error | cancelled
-    stage: 'extract_audio',
-    stages: EXTRACT_STAGES.map((s) => ({ ...s, state: 'pending', done: 0, total: 0 })),
-    message: 'Đang khởi tạo...',
-    progress: 0,
-    errors: [],
-    warnings: [],
-    result: null,
-    startedAt: Date.now(),
-    finishedAt: null,
-    abortCtrl: new AbortController(),
-    procs: new Set()
-  };
-  extractTasks.set(taskId, task);
+function cleanupExtractCheckpoint(task) {
+  if (task.cleanupTimer) {
+    clearTimeout(task.cleanupTimer);
+    task.cleanupTimer = null;
+  }
+  const dir = task.checkpoint && task.checkpoint.workDir;
+  if (dir) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch (_) {}
+  }
+  task.checkpoint = null;
+}
+
+function runExtractTask(task, params) {
   const setStage = (code, patch = {}) => {
     const idx = EXTRACT_STAGES.findIndex((s) => s.code === code);
     task.stage = code;
     task.stages.forEach((s, i) => {
-      if (i < idx && s.state === 'running') s.state = 'completed';
+      if (i < idx && (s.state === 'running' || s.state === 'error')) s.state = 'completed';
       if (i === idx) Object.assign(s, { state: 'running' }, patch);
     });
   };
@@ -2681,6 +2822,26 @@ function startExtractTask(params = {}) {
     task.procs.add(proc);
     proc.on('close', () => task.procs.delete(proc));
   };
+  const log = (level, msg) => {
+    task.logs.push({ at: new Date().toISOString(), level, stage: task.stage, source: task.source, msg: redactSecrets(String(msg)).slice(0, 500) });
+    if (task.logs.length > 400) task.logs.splice(0, task.logs.length - 400);
+  };
+  task.log = log;
+  const runId = (task.runSeq = (task.runSeq || 0) + 1);
+  const stale = () => task.runSeq !== runId; // lần chạy cũ (đã hủy) không được ghi đè lần "Chạy tiếp" mới
+  const ck = task.checkpoint;
+  // Đánh dấu sẵn các bước đã xong từ lần chạy trước
+  if (ck && ck.asr) {
+    ['extract_audio', 'asr'].forEach((c) => {
+      const st = task.stages.find((x) => x.code === c);
+      if (st) st.state = 'completed';
+    });
+    const dz = task.stages.find((x) => x.code === 'diarize');
+    if (dz && dz.state !== 'completed') dz.state = ck.asr.diarization && ck.asr.diarization.ok ? 'completed' : 'skipped';
+  } else if (ck && ck.audioReady) {
+    const st = task.stages.find((x) => x.code === 'extract_audio');
+    if (st) st.state = 'completed';
+  }
 
   (async () => {
     try {
@@ -2689,8 +2850,10 @@ function startExtractTask(params = {}) {
         translationProvider: params.translationProvider,
         translationStyle: params.translationStyle,
         aiModel: params.aiModel,
-        autoDiarize: params.autoDiarize !== false,
+        autoDiarize: params.autoDiarize === true,
         numSpeakers: params.numSpeakers,
+        checkpoint: task.checkpoint,
+        onLog: log,
         trackProc,
         signal: task.abortCtrl.signal,
         onStepChange: (idx, msg) => {
@@ -2698,7 +2861,7 @@ function startExtractTask(params = {}) {
           if (idx === 1) setStage('extract_audio');
           else if (idx === 2) setStage('asr');
           else if (idx === 3) setStage('translate');
-          task.progress = { 1: 3, 2: 8, 3: 70 }[idx] || task.progress;
+          task.progress = Math.max(task.progress || 0, { 1: 3, 2: 8, 3: 70 }[idx] || 0);
         },
         onSubProgress: (stage, d, t) => {
           if (stage === 'warning') {
@@ -2722,7 +2885,7 @@ function startExtractTask(params = {}) {
           }
         }
       });
-      if (task.status === 'cancelled') return;
+      if (task.status === 'cancelled' || stale()) return;
       setStage('validate');
       const validation = validateSegmentsForTts(out.segments, { targetLang: params.targetLang || 'vi', totalDuration: out.totalDuration });
       task.errors.push(...validation.errors);
@@ -2730,6 +2893,8 @@ function startExtractTask(params = {}) {
       if (Array.isArray(out.untranslatedIds) && out.untranslatedIds.length) {
         task.warnings.push(`${out.untranslatedIds.length} đoạn chưa dịch được (số ${out.untranslatedIds.slice(0, 15).join(', ')}) — hãy nhập lời dịch.`);
       }
+      log(validation.errors.length ? 'warn' : 'ok', `Bước 4: kiểm tra ${validation.checked} đoạn trước TTS — ${validation.errors.length} lỗi, ${validation.warnings.length} cảnh báo.`);
+      validation.errors.slice(0, 10).forEach((e) => log('error', e));
       task.stages.forEach((s) => {
         if (s.state === 'running' || (s.state === 'pending' && s.code !== 'diarize')) s.state = 'completed';
         if (s.code === 'diarize' && s.state === 'pending') s.state = out.diarization && out.diarization.ok ? 'completed' : 'skipped';
@@ -2738,17 +2903,126 @@ function startExtractTask(params = {}) {
       task.status = 'completed';
       task.progress = 100;
       task.message = `Hoàn tất: ${out.segments.length} phân đoạn${validation.errors.length ? ` • ${validation.errors.length} lỗi cần sửa trước khi lồng tiếng` : ''}`;
+      log('ok', `Hoàn tất sau ${(((Date.now() - task.startedAt) / 1000)).toFixed(1)} giây.`);
+      cleanupExtractCheckpoint(task);
     } catch (err) {
-      if (task.status === 'cancelled') return;
+      if (task.status === 'cancelled' || stale()) return;
       task.status = 'error';
-      task.errors.push(redactSecrets(err.message || String(err)));
-      task.message = `Lỗi: ${redactSecrets(err.message || String(err))}`;
+      const msg = redactSecrets(err.message || String(err));
+      task.errors.push(msg);
+      task.message = `Lỗi: ${msg}`;
       const cur = task.stages.find((s) => s.state === 'running');
       if (cur) cur.state = 'error';
+      log('error', `Lỗi ở bước "${cur ? cur.label : task.stage}": ${msg}`);
+      if (task.checkpoint) {
+        log('info', 'Đã lưu kết quả các bước trước — bấm "Chạy tiếp từ bước lỗi" để không phải làm lại từ đầu (có thể đổi bộ dịch/model).');
+        task.cleanupTimer = setTimeout(() => cleanupExtractCheckpoint(task), EXTRACT_RESUME_TTL_MS);
+        if (task.cleanupTimer.unref) task.cleanupTimer.unref();
+      }
     } finally {
-      task.finishedAt = Date.now();
+      if (!stale()) task.finishedAt = Date.now();
     }
   })();
+}
+
+function startExtractTask(params = {}) {
+  const { videoPath } = params;
+  if (!videoPath || !fs.existsSync(videoPath)) throw new Error('Không tìm thấy file video đầu vào trên ổ đĩa.');
+  const taskId = `extract_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  const source = params.source === 'user' ? 'user' : 'download';
+  const task = {
+    taskId,
+    videoPath,
+    source,
+    inputFileName: path.basename(videoPath),
+    status: 'running', // running | completed | error | cancelled
+    stage: 'extract_audio',
+    stages: EXTRACT_STAGES.map((s) => ({ ...s, state: 'pending', done: 0, total: 0 })),
+    message: 'Đang khởi tạo...',
+    progress: 0,
+    errors: [],
+    warnings: [],
+    logs: [],
+    attempts: 1,
+    result: null,
+    params: null,
+    startedAt: Date.now(),
+    finishedAt: null,
+    abortCtrl: new AbortController(),
+    procs: new Set(),
+    checkpoint: Array.isArray(params.customSegments) && params.customSegments.length ? null : {}
+  };
+  // Tham số để chạy tiếp (không có API key — key nằm ở config/ai_secrets.json)
+  task.params = {
+    videoPath,
+    targetLang: params.targetLang || 'vi',
+    customSegments: params.customSegments || null,
+    cloudConsent: Boolean(params.cloudConsent),
+    translationProvider: params.translationProvider,
+    translationStyle: params.translationStyle,
+    aiModel: params.aiModel,
+    autoDiarize: params.autoDiarize === true,
+    numSpeakers: params.numSpeakers
+  };
+  if (!task.params.autoDiarize) {
+    const dz = task.stages.find((x) => x.code === 'diarize');
+    if (dz) Object.assign(dz, { state: 'skipped', label: 'Phân tách người nói (đang tắt)' });
+  }
+  extractTasks.set(taskId, task);
+  // Dọn dữ liệu chạy tiếp của các tác vụ lỗi cũ quá nhiều (giữ 5 gần nhất)
+  const stale = Array.from(extractTasks.values()).filter((t) => t !== task && t.checkpoint && t.status !== 'running');
+  stale.slice(0, Math.max(0, stale.length - 5)).forEach(cleanupExtractCheckpoint);
+  const p = task.params;
+  runExtractTask(task, p);
+  task.log('info', `Bắt đầu • nguồn: ${source} • video: ${task.inputFileName} • dịch sang ${String(p.targetLang).toUpperCase()} • bộ dịch: ${p.translationProvider || 'auto'}${p.aiModel ? ` (${p.aiModel})` : ''} • nhận diện người nói: ${p.autoDiarize ? 'BẬT' : 'tắt'}.`);
+  return serializeExtractTask(task);
+}
+
+/**
+ * Chạy tiếp tác vụ Phân đoạn & Dịch từ bước bị lỗi/hủy: dùng lại âm thanh đã tách, kết quả ASR và các đoạn đã dịch.
+ * Có thể đổi bộ dịch / model / văn phong (vd. Gemini quá tải → chuyển sang Qwen) mà không phải nhận dạng lại.
+ */
+function resumeExtractTask(taskId, overrides = {}) {
+  const task = extractTasks.get(taskId);
+  if (!task) throw new Error('Không tìm thấy tác vụ phân đoạn (có thể ứng dụng đã khởi động lại).');
+  if (task.status === 'running') throw new Error('Tác vụ đang chạy.');
+  if (task.status === 'completed') throw new Error('Tác vụ đã hoàn tất, không cần chạy tiếp.');
+  if (!task.checkpoint) throw new Error('Dữ liệu để chạy tiếp đã được dọn (quá 6 giờ). Hãy bấm "Phân đoạn & Dịch" để chạy lại.');
+  if (task.cleanupTimer) {
+    clearTimeout(task.cleanupTimer);
+    task.cleanupTimer = null;
+  }
+  const p = { ...task.params };
+  for (const k of ['cloudConsent', 'translationProvider', 'translationStyle', 'aiModel', 'targetLang']) {
+    if (overrides[k] !== undefined && overrides[k] !== null && overrides[k] !== '') p[k] = k === 'cloudConsent' ? Boolean(overrides[k]) : overrides[k];
+  }
+  const changed = ['translationProvider', 'aiModel', 'translationStyle', 'targetLang'].filter((k) => String(p[k] || '') !== String(task.params[k] || ''));
+  if (p.targetLang !== task.params.targetLang || p.translationStyle !== task.params.translationStyle) {
+    task.checkpoint.translated = null; // ngôn ngữ đích / văn phong đổi → dịch lại toàn bộ (vẫn dùng lại ASR)
+    task.checkpoint.translationStats = null;
+  }
+  task.params = p;
+  task.status = 'running';
+  task.attempts = (task.attempts || 1) + 1;
+  task.errors = [];
+  task.warnings = [];
+  task.result = null;
+  task.finishedAt = null;
+  task.startedAt = Date.now();
+  task.abortCtrl = new AbortController();
+  task.procs = new Set();
+  task.stages.forEach((s) => {
+    if (s.state === 'error' || s.state === 'running') s.state = 'pending';
+    if (s.code === 'translate' || s.code === 'validate') s.state = 'pending';
+  });
+  runExtractTask(task, p);
+  const ck = task.checkpoint;
+  task.log(
+    'info',
+    `▶ Chạy tiếp lần ${task.attempts}: giữ ${ck.asr ? `kết quả ASR (${ck.asr.segments.length} đoạn)` : ck.audioReady ? 'âm thanh đã tách' : 'không có gì'}` +
+      `${ck.translated ? `, ${ck.translated.filter((x) => String(x.translatedText || '').trim()).length} đoạn đã dịch` : ''}` +
+      `${changed.length ? ` • thay đổi: ${changed.map((k) => `${k}=${p[k] || 'auto'}`).join(', ')}` : ''}.`
+  );
   return serializeExtractTask(task);
 }
 
@@ -2763,6 +3037,13 @@ function cancelExtractTask(taskId) {
   task.status = 'cancelled';
   task.message = 'Đã hủy phân đoạn & dịch.';
   task.finishedAt = Date.now();
+  const cur = task.stages.find((s) => s.state === 'running');
+  if (cur) cur.state = 'pending';
+  if (task.log) task.log('warn', 'Người dùng đã hủy. Có thể bấm "Chạy tiếp" để làm tiếp từ bước đang dở.');
+  if (task.checkpoint && !task.cleanupTimer) {
+    task.cleanupTimer = setTimeout(() => cleanupExtractCheckpoint(task), EXTRACT_RESUME_TTL_MS);
+    if (task.cleanupTimer.unref) task.cleanupTimer.unref();
+  }
   try {
     task.abortCtrl.abort();
   } catch (_) {}
@@ -2942,6 +3223,7 @@ function cancelDubbingJob(jobId) {
   } catch (_) {}
   job.step = 'Đã hủy tác vụ lồng tiếng.';
   job.statusText = job.step;
+  if (Array.isArray(job.logs)) job.logs.push({ at: new Date().toISOString(), level: 'warn', step: job.stepIndex, source: job.source || 'download', msg: 'Người dùng đã hủy tác vụ lồng tiếng.' });
   for (const proc of job.procs) {
     try {
       proc.kill('SIGKILL');
@@ -2971,6 +3253,7 @@ module.exports = {
   normalizeTranslationProvider,
   isSeparationAvailable,
   startExtractTask,
+  resumeExtractTask,
   getExtractTask,
   cancelExtractTask,
   validateSegmentsForTts,

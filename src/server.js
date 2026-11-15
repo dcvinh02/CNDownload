@@ -70,6 +70,7 @@ const {
   getAllDubbingJobs,
   cancelDubbingJob,
   startExtractTask,
+  resumeExtractTask,
   getExtractTask,
   cancelExtractTask,
   resumeDubbingJob
@@ -133,6 +134,13 @@ function isServableMediaPath(filePath) {
     for (const d of (ov && ov.platformDirs) || []) if (d && d.path) roots.push(d.path);
   } catch (_) {}
   roots.push(path.join(os.tmpdir(), 'cn_video_scraper_voice_previews'));
+  // File đầu ra do chính tác vụ lồng tiếng tạo (kể cả khi người dùng chọn thư mục đầu ra bên ngoài) — khớp đúng từng file
+  try {
+    for (const j of getAllDubbingJobs()) {
+      const out = j && j.status === 'completed' && (j.outputPath || j.outputVideoPath);
+      if (out && fs.existsSync(out) && fs.realpathSync(out) === real) return true;
+    }
+  } catch (_) {}
   return roots.some((r) => {
     try {
       const rr = fs.realpathSync(r);
@@ -479,7 +487,7 @@ function createServer() {
         translationProvider,
         translationStyle,
         aiModel,
-        autoDiarize: autoDiarize !== false,
+        autoDiarize: autoDiarize === true,
         numSpeakers
       });
       res.json({ success: true, ...out });
@@ -500,6 +508,15 @@ function createServer() {
     const task = getExtractTask(req.query.taskId);
     if (!task) return res.status(404).json({ success: false, error: 'Không tìm thấy tác vụ phân đoạn.' });
     res.json({ success: true, task });
+  });
+
+  app.post('/api/dubbing/extract-task/resume', (req, res) => {
+    try {
+      const { taskId, ...overrides } = req.body || {};
+      res.json({ success: true, task: resumeExtractTask(taskId, overrides) });
+    } catch (err) {
+      res.status(400).json({ success: false, error: redactSecrets(err.message) });
+    }
   });
 
   app.post('/api/dubbing/extract-task/cancel', (req, res) => {

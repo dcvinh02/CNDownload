@@ -906,6 +906,7 @@ def cmd_transcribe_and_translate(args):
 
     source_texts = [seg["sourceText"] for seg in merged_segments]
     translated_texts = None
+    translation_error = None
     translation_mode = ""
     used_cloud = False
 
@@ -946,11 +947,9 @@ def cmd_transcribe_and_translate(args):
                 cloud_base_url=cloud_base_url,
             )
         except Exception as err:
-            return {
-                "ok": False,
-                "errorCode": "TRANSLATION_FAILED",
-                "error": str(err),
-            }
+            # Giữ kết quả ASR để ứng dụng chạy tiếp từ bước dịch (không phải nhận dạng lại)
+            translation_error = str(err)
+            translated_texts = ["" for _ in source_texts]
 
     speaker_count = 1
     diar_info = None
@@ -988,15 +987,8 @@ def cmd_transcribe_and_translate(args):
             }
         )
 
-    if untranslated_ids and len(untranslated_ids) == len(merged_segments):
-        return {
-            "ok": False,
-            "errorCode": "EMPTY_TRANSLATION",
-            "error": "Không dịch được đoạn thoại nào bằng bộ dịch đã chọn. Hãy dùng bộ dịch AI/Google hoặc nhập lời dịch thủ công.",
-        }
-
     model_name = os.path.basename(asr_dir.rstrip("/\\"))
-    return {
+    result = {
         "ok": True,
         "detectedSourceLang": detected_code,
         "languageProbability": detected_prob,
@@ -1014,6 +1006,17 @@ def cmd_transcribe_and_translate(args):
         "diarization": diar_info,
         "segments": final_segments,
     }
+    partial = dict(result, segments=[dict(x, translatedText="") for x in final_segments], untranslatedIds=[])
+    if translation_error is not None:
+        return {"ok": False, "errorCode": "TRANSLATION_FAILED", "error": translation_error, "partialAsr": partial}
+    if untranslated_ids and len(untranslated_ids) == len(merged_segments):
+        return {
+            "ok": False,
+            "errorCode": "EMPTY_TRANSLATION",
+            "error": "Không dịch được đoạn thoại nào bằng bộ dịch đã chọn. Hãy dùng bộ dịch AI/Google hoặc nhập lời dịch thủ công.",
+            "partialAsr": partial,
+        }
+    return result
 
 
 def cmd_translate_batch(args):

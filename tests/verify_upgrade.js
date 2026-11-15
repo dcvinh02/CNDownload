@@ -948,6 +948,91 @@ async function main() {
     assert(task.result && task.result.segments.length >= 3 && task.result.segments.length <= 6 && task.result.validation, `thiếu kết quả/kiểm tra: ${JSON.stringify(task.result && task.result.segments && task.result.segments.map((x) => x.sourceText))}`);
     return `giai đoạn đã thấy: ${Array.from(seenStages).join(' → ')}; ${task.result.segments.length} đoạn, ${task.elapsedSec}s`;
   });
+  await check('Phân đoạn & Dịch: lỗi ở bước dịch → "Chạy tiếp" dùng lại âm thanh + ASR, chỉ dịch lại; nhận diện người nói mặc định tắt; có nhật ký', async () => {
+    if (!fs.existsSync(syncVideo)) throw skip('Không tạo được video thử (Tingting / edge-tts).', true);
+    const { isProviderReady } = require('../src/ai/ai_provider_manager');
+    if (!isProviderReady('local_qwen')) throw skip('Chưa cài AI Local Qwen (cần để dịch thật ở lần chạy tiếp).', true);
+    // Lỗi được TẠO trong test: chặn yêu cầu HTTP tới máy chủ dịch AI Local ở lần chạy đầu (giống máy chủ không phản hồi)
+    const realFetch = globalThis.fetch;
+    let block = true;
+    globalThis.fetch = (u, o) => (block && /\/v1\/chat\/completions/.test(String(u)) ? Promise.reject(new TypeError('fetch failed (kiểm thử: chặn máy chủ dịch)')) : realFetch(u, o));
+    const waitT = async (id) => {
+      for (let i = 0; i < 600; i++) {
+        const t = dub.getExtractTask(id);
+        if (t.status !== 'running') return t;
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      throw new Error('quá thời gian');
+    };
+    try {
+      // targetLang 'en' để không trùng bộ nhớ đệm bản dịch của test trước
+      const t0 = dub.startExtractTask({ videoPath: syncVideo, source: 'user', targetLang: 'en', translationProvider: 'ai_local_qwen' });
+      const a = await waitT(t0.taskId);
+      const st = (t, c) => t.stages.find((x) => x.code === c).state;
+      assert(a.status === 'error', `lần 1 phải lỗi ở bước dịch, thực tế: ${a.status}`);
+      assert(st(a, 'extract_audio') === 'completed' && st(a, 'asr') === 'completed' && st(a, 'translate') === 'error', `trạng thái bước: ${a.stages.map((x) => `${x.code}:${x.state}`).join(' ')}`);
+      assert(st(a, 'diarize') === 'skipped', 'nhận diện người nói phải mặc định tắt');
+      assert(a.resumable && a.checkpointInfo.asrSegments >= 3, `thiếu dữ liệu chạy tiếp: ${JSON.stringify(a.checkpointInfo)}`);
+      block = false;
+      const nLogs = a.logs.length;
+      dub.resumeExtractTask(t0.taskId, {});
+      const b = await waitT(t0.taskId);
+      assert(b.status === 'completed', `chạy tiếp: ${b.status} ${(b.errors || []).join(' ')}`);
+      const after = b.logs.slice(nLogs).map((l) => l.msg);
+      assert(after.some((m) => /Bỏ qua Bước 1–2/.test(m)), 'không thấy log bỏ qua ASR');
+      assert(!after.some((m) => /Bước 2: nhận dạng giọng nói bằng/.test(m)), 'ASR bị chạy lại');
+      assert(b.logs.every((l) => l.source === 'user'), 'nhật ký phải ghi nguồn user');
+      assert(b.result.segments.every((x) => String(x.translatedText || '').trim()), 'còn đoạn chưa dịch');
+      return `lần 1 lỗi ở bước dịch (ASR ${a.checkpointInfo.asrSegments} đoạn được giữ) → chạy tiếp ${b.elapsedSec}s, không ASR lại • ${b.logs.length} dòng nhật ký [user]`;
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+  await check('Giọng lồng tiếng mặc định (Tiếng Việt) là Ngọc Huyền — VieNeu', async () => {
+    const vi = dub.getSupportedVoices('vi');
+    const def = vi.find((v) => v.isDefaultRecommended);
+    const vieneuReady = vi.some((v) => v.engine === 'vieneu' && v.voiceArg);
+    if (!vieneuReady) throw skip('VieNeu-TTS chưa cài — giọng mặc định là giọng offline có sẵn.', true);
+    assert(def && def.voiceArg === 'Ngọc Huyền', `mặc định: ${def && def.name}`);
+    assert(dub.resolveVoiceConfig('', 'vi').voiceArg === 'Ngọc Huyền', 'resolveVoiceConfig("") không ra Ngọc Huyền');
+    return def.name;
+  });
+  await check('Lồng tiếng nguồn video ngoài: chọn video + thư mục đầu ra, nhật ký ghi nguồn user, xem thử được file đầu ra', async () => {
+    if (!fs.existsSync(syncVideo)) throw skip('Không tạo được video thử.', true);
+    let voice;
+    try {
+      voice = dub.resolveVoiceConfig('', 'vi');
+    } catch (e) {
+      throw skip(`Chưa có giọng đọc Tiếng Việt: ${e.message}`, true);
+    }
+    const outDir = path.join(TMP, 'thu muc dau ra ngoai');
+    const job = dub.startDubbingJob({
+      videoPath: syncVideo,
+      source: 'user',
+      outputDir: outDir,
+      targetLang: 'vi',
+      voiceId: voice.id,
+      removeOriginalVoice: false,
+      customSegments: [
+        { index: 1, id: 1, startSec: 1.0, endSec: 2.6, sourceText: 'a', translatedText: 'Xin chào các bạn.' },
+        { index: 2, id: 2, startSec: 6.0, endSec: 7.6, sourceText: 'b', translatedText: 'Hôm nay trời đẹp.' }
+      ]
+    });
+    let j;
+    for (let i = 0; i < 600; i++) {
+      j = dub.getDubbingJob(job.jobId);
+      if (j.status !== 'running') break;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    assert(j.status === 'completed', `${j.status}: ${j.error}`);
+    assert(path.dirname(j.outputPath) === outDir && fs.existsSync(j.outputPath), `file không nằm trong thư mục đầu ra: ${j.outputPath}`);
+    assert(j.source === 'user' && j.logs.length > 0 && j.logs.every((l) => l.source === 'user'), 'nhật ký phải ghi nguồn user');
+    const r = await req('GET', `/api/play-local?path=${encodeURIComponent(j.outputPath)}`, { Range: 'bytes=0-1' });
+    assert(r.status === 206, `xem thử file đầu ra: HTTP ${r.status}`);
+    const other = await req('GET', `/api/play-local?path=${encodeURIComponent(syncVideo)}`);
+    assert(other.status === 404, 'không được mở file ngoài thư mục lưu không phải đầu ra lồng tiếng');
+    return `${path.basename(j.outputPath)} trong "${path.basename(outDir)}" • ${j.logs.length} dòng nhật ký [user] • xem thử HTTP 206`;
+  });
   await check('/api/ai/config không trả về API Key', async () => {
     const r = await req('GET', '/api/ai/config');
     assert(r.status === 200 && !r.body.includes('TEST-KEY-1234567890'), 'lộ key');

@@ -396,7 +396,10 @@
           <!-- Bước 1: Chọn Video đã tải, Ngôn ngữ đích & Giọng đọc -->
           <div class="dubbing-controls-row">
             <div class="dub-ctrl-col">
-              <div style="font-size:12px;font-weight:700;margin-bottom:5px;">1. Chọn Video đã tải cần lồng tiếng:</div>
+              <div style="font-size:12px;font-weight:700;margin-bottom:5px;display:flex;justify-content:space-between;align-items:center;gap:6px;">
+                <span>1. Chọn Video cần lồng tiếng:</span>
+                <button type="button" class="btn-sm" id="dubExternalToggleBtn" onclick="toggleDubExternalSource()" title="Lồng tiếng một video bất kỳ trên máy (không cần tải bằng ứng dụng)">📂 Thêm nguồn video ngoài</button>
+              </div>
               <select id="dubVideoSelect" class="folder-input" style="height:36px;" onchange="onSelectDubVideo()">
                 <option value="">-- Chọn video từ danh sách đã tải --</option>
               </select>
@@ -420,6 +423,24 @@
               <button class="btn-outline" style="height:36px;border-color:#93c5fd;background:#eff6ff;color:#1d4ed8;" onclick="extractScriptFromSelectedVideo()">📝 Phân đoạn & Dịch (ASR)</button>
             </div>
           </div>
+          <div id="dubExternalSourcePanel" class="dub-external-panel" style="display:none;">
+            <div class="dub-external-head">
+              <strong>📂 Nguồn video ngoài</strong>
+              <span class="badge">Nhật ký ghi nguồn: user</span>
+              <button type="button" class="btn-icon-sm" onclick="toggleDubExternalSource(false)" title="Quay lại dùng video đã tải">✕</button>
+            </div>
+            <label class="dub-external-row">
+              <span>Video đầu vào</span>
+              <input type="text" id="dubExternalVideoPath" class="folder-input" placeholder="Đường dẫn đầy đủ tới video, vd. /Users/ban/Movies/clip.mp4 hoặc D:\Video\clip.mp4" />
+              <button type="button" class="btn-sm" onclick="pickDubExternalVideo()">Chọn file…</button>
+            </label>
+            <label class="dub-external-row">
+              <span>Thư mục đầu ra</span>
+              <input type="text" id="dubExternalOutputDir" class="folder-input" placeholder="Để trống = thư mục Dubbed/ cạnh video gốc" />
+              <button type="button" class="btn-sm" onclick="pickDubExternalOutputDir()">Chọn thư mục…</button>
+            </label>
+            <div style="font-size:11.5px;color:#64748b;">Sau khi chọn video: bấm "📝 Phân đoạn & Dịch" rồi "🎙️ Bắt đầu Lồng tiếng". Video gốc không bị ghi đè.</div>
+          </div>
           <div id="dubExtractMonitor" class="extract-monitor" style="display:none;">
             <div class="extract-monitor-head">
               <strong id="dubExtractTitle">📝 Phân đoạn & Dịch</strong>
@@ -433,14 +454,22 @@
             <div id="dubExtractMessage" style="font-size:12px;color:#334155;margin-bottom:6px;"></div>
             <div id="dubExtractStages" class="extract-stages"></div>
             <div id="dubExtractIssues"></div>
+            <div id="dubExtractResumeRow" style="display:none;margin-top:6px;">
+              <button type="button" class="btn-sm" style="border-color:#86efac;background:#f0fdf4;color:#15803d;" onclick="resumeExtractTaskUi()">▶ Chạy tiếp từ bước lỗi</button>
+              <span id="dubExtractResumeInfo" style="font-size:11.5px;color:#475569;margin-left:6px;"></span>
+            </div>
+            <details id="dubExtractLogBox" class="extract-log-box" open>
+              <summary>📜 Nhật ký Phân đoạn & Dịch <span id="dubExtractLogCount" style="color:#64748b;font-weight:400;"></span></summary>
+              <div id="dubExtractLog" class="extract-log"></div>
+            </details>
           </div>
           <div class="dub-diarize-row">
             <label class="dub-check-label">
-              <input type="checkbox" id="dubAutoDiarizeCheck" checked />
-              <span>🗣️ Tự nhận diện người nói khi phân đoạn (mỗi người một giọng lồng tiếng)</span>
+              <input type="checkbox" id="dubAutoDiarizeCheck" onchange="document.getElementById('dubNumSpeakersInput').disabled = !this.checked" />
+              <span>🗣️ Tự nhận diện người nói khi phân đoạn (mỗi người một giọng lồng tiếng) — mặc định tắt, chỉ chạy khi bật</span>
             </label>
             <label style="font-size:12px;color:#334155;">Số người nói:
-              <input type="number" id="dubNumSpeakersInput" min="0" max="20" value="0" class="folder-input" style="width:64px;height:28px;display:inline-block;" title="0 = tự động" />
+              <input type="number" id="dubNumSpeakersInput" min="0" max="20" value="0" disabled class="folder-input" style="width:64px;height:28px;display:inline-block;" title="0 = tự động (chỉ dùng khi bật nhận diện người nói)" />
               <span style="color:#64748b;">(0 = tự động)</span>
             </label>
           </div>
@@ -522,7 +551,7 @@
 
           <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
             <div style="font-size:12px;color:#64748b;">
-              Bản lồng tiếng sẽ được xuất thành file mới trong thư mục con <code>Dubbed/</code> kèm file <code>.dubbing.metadata.json</code> (Tuyệt đối không ghi đè video gốc).
+              Bản lồng tiếng sẽ được xuất thành file mới trong thư mục con <code>Dubbed/</code> (hoặc thư mục đầu ra bạn chọn cho nguồn video ngoài) kèm file <code>.dubbing.metadata.json</code> (Tuyệt đối không ghi đè video gốc).
             </div>
             <div style="display:flex;gap:8px;">
               <button class="btn-download" style="padding:0 20px;" onclick="startDubbingProcess()">

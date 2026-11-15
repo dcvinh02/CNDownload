@@ -1542,10 +1542,76 @@ function populateDubVideoSelect(preselectPath = '') {
 
 function openDubbingForFile(filePath) {
   switchWorkspaceTab('dubbing');
+  const known = allSavedFilesCache.some((f) => f.filePath === filePath);
+  if (!known) {
+    // Video ngoài (nguồn user) từ tác vụ trước
+    toggleDubExternalSource(true);
+    const inp = document.getElementById('dubExternalVideoPath');
+    if (inp) inp.value = filePath;
+    extractScriptFromSelectedVideo();
+    return;
+  }
+  toggleDubExternalSource(false);
   populateDubVideoSelect(filePath);
   const sel = document.getElementById('dubVideoSelect');
   if (sel) sel.value = filePath;
   extractScriptFromSelectedVideo();
+}
+
+/* ---------- Nguồn video ngoài (người dùng chọn đường dẫn video + thư mục đầu ra) ---------- */
+let dubExternalMode = false;
+function toggleDubExternalSource(force) {
+  dubExternalMode = typeof force === 'boolean' ? force : !dubExternalMode;
+  const panel = document.getElementById('dubExternalSourcePanel');
+  const sel = document.getElementById('dubVideoSelect');
+  const btn = document.getElementById('dubExternalToggleBtn');
+  if (panel) panel.style.display = dubExternalMode ? 'flex' : 'none';
+  if (sel) sel.disabled = dubExternalMode;
+  if (btn) btn.textContent = dubExternalMode ? '↩ Dùng video đã tải' : '📂 Thêm nguồn video ngoài';
+}
+/** Video đang chọn để phân đoạn / lồng tiếng: { videoPath, source: 'download' | 'user', outputDir } */
+function getDubVideoSource() {
+  if (dubExternalMode) {
+    return {
+      videoPath: (document.getElementById('dubExternalVideoPath')?.value || '').trim(),
+      source: 'user',
+      outputDir: (document.getElementById('dubExternalOutputDir')?.value || '').trim()
+    };
+  }
+  return { videoPath: document.getElementById('dubVideoSelect')?.value || '', source: 'download', outputDir: '' };
+}
+async function pickDubExternalVideo() {
+  try {
+    const res = await fetch('/api/pick-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ promptText: 'Chọn video cần lồng tiếng' })
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Không mở được hộp thoại chọn file');
+    if (!data.path) return toast('Chưa chọn file nào (hoặc hệ điều hành không hỗ trợ hộp thoại) — có thể dán đường dẫn vào ô.', 'warn');
+    document.getElementById('dubExternalVideoPath').value = data.path;
+    currentDubSegments = [];
+    renderDubSegments();
+    toast('📂 Đã chọn video nguồn ngoài — đang phân đoạn & dịch...');
+    extractScriptFromSelectedVideo();
+  } catch (e) {
+    toast('Lỗi chọn file: ' + e.message, 'error');
+  }
+}
+async function pickDubExternalOutputDir() {
+  try {
+    const res = await fetch('/api/pick-folder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ promptText: 'Chọn thư mục lưu video lồng tiếng' })
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Không mở được hộp thoại chọn thư mục');
+    if (data.path) document.getElementById('dubExternalOutputDir').value = data.path;
+  } catch (e) {
+    toast('Lỗi chọn thư mục: ' + e.message, 'error');
+  }
 }
 
 function onSelectDubVideo() {
@@ -1677,12 +1743,13 @@ let activeExtractTaskId = null;
 let extractPollTimer = null;
 
 async function extractScriptFromSelectedVideo() {
-  const videoPath = document.getElementById('dubVideoSelect')?.value;
+  const src = getDubVideoSource();
+  const videoPath = src.videoPath;
   const targetLang = document.getElementById('dubTargetLangSelect')?.value || 'vi';
   const trParams = getDubbingTranslationParams();
 
   if (!videoPath) {
-    toast('Vui lòng chọn video đã tải ở mục 1 trước!', 'warn');
+    toast(src.source === 'user' ? 'Vui lòng chọn hoặc dán đường dẫn video nguồn ngoài trước!' : 'Vui lòng chọn video đã tải ở mục 1 trước!', 'warn');
     return;
   }
   if (providerNeedsCloud(trParams.translationProvider) && !trParams.cloudConsent) {
@@ -1700,6 +1767,7 @@ async function extractScriptFromSelectedVideo() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         videoPath,
+        source: src.source,
         targetLang,
         autoDiarize: Boolean(document.getElementById('dubAutoDiarizeCheck')?.checked),
         numSpeakers: parseInt(document.getElementById('dubNumSpeakersInput')?.value || '0', 10) || 0,
@@ -1708,8 +1776,20 @@ async function extractScriptFromSelectedVideo() {
     });
     const data = await res.json();
     if (!data.success) throw new Error(data.error || 'Không thể bắt đầu phân đoạn');
-    activeExtractTaskId = data.task.taskId;
-    renderExtractMonitor(data.task);
+    return await followExtractTask(data.task);
+  } catch (e) {
+    activeExtractTaskId = null;
+    toast('Lỗi phân đoạn lời nói: ' + e.message, 'error');
+  }
+}
+
+let lastExtractTask = null;
+/** Theo dõi tác vụ Phân đoạn & Dịch tới khi xong (dùng cho lần chạy đầu và "Chạy tiếp") */
+async function followExtractTask(task) {
+  activeExtractTaskId = task.taskId;
+  lastExtractTask = task;
+  renderExtractMonitor(task);
+  {
     return await new Promise((resolve) => {
       if (extractPollTimer) clearInterval(extractPollTimer);
       extractPollTimer = setInterval(async () => {
@@ -1718,22 +1798,65 @@ async function extractScriptFromSelectedVideo() {
           const d = await r.json();
           if (!d.success) return;
           renderExtractMonitor(d.task);
+          lastExtractTask = d.task;
           if (d.task.status !== 'running') {
             clearInterval(extractPollTimer);
             extractPollTimer = null;
             activeExtractTaskId = null;
             if (d.task.status === 'completed') applyExtractResult(d.task.result);
-            else if (d.task.status === 'error') toast('Lỗi phân đoạn & dịch: ' + (d.task.errors[0] || ''), 'error');
+            else if (d.task.status === 'error')
+              toast('Lỗi phân đoạn & dịch: ' + (d.task.errors[0] || '') + (d.task.resumable ? ' — có thể bấm "▶ Chạy tiếp từ bước lỗi".' : ''), 'error');
             else toast('🛑 Đã hủy phân đoạn & dịch.', 'warn');
             resolve(d.task);
           }
         } catch (_) {}
       }, 700);
     });
-  } catch (e) {
-    activeExtractTaskId = null;
-    toast('Lỗi phân đoạn lời nói: ' + e.message, 'error');
   }
+}
+
+async function resumeExtractTaskUi() {
+  const t = lastExtractTask;
+  if (!t || !t.taskId) return toast('Không có tác vụ để chạy tiếp.', 'warn');
+  if (activeExtractTaskId) return toast('Tác vụ đang chạy.', 'warn');
+  const trParams = getDubbingTranslationParams();
+  if (providerNeedsCloud(trParams.translationProvider) && !trParams.cloudConsent) {
+    toast('Bộ dịch Cloud/AI yêu cầu tích chọn "Cho phép gửi văn bản lên dịch vụ đám mây".', 'warn');
+    return;
+  }
+  try {
+    const res = await fetch('/api/dubbing/extract-task/resume', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        taskId: t.taskId,
+        targetLang: document.getElementById('dubTargetLangSelect')?.value || 'vi',
+        ...trParams
+      })
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Không chạy tiếp được');
+    toast('▶ Đang chạy tiếp từ bước bị lỗi (dùng lại kết quả đã có)...');
+    await followExtractTask(data.task);
+  } catch (e) {
+    toast('Lỗi chạy tiếp: ' + e.message, 'error');
+  }
+}
+
+function fmtLogTime(iso) {
+  try {
+    return new Date(iso).toLocaleTimeString('vi-VN', { hour12: false });
+  } catch (_) {
+    return '';
+  }
+}
+function renderLogLines(logs) {
+  return (logs || [])
+    .map(
+      (l) =>
+        `<div class="lg-${escapeHtml(l.level || 'info')}"><span class="lg-time">${escapeHtml(fmtLogTime(l.at))}</span> <span class="lg-src">[${escapeHtml(l.source || 'download')}]</span> ${escapeHtml(l.msg || '')}</div>`
+    )
+    .join('');
 }
 
 /** 75.4 → "1:15" (đồng hồ phút:giây, dùng chung cho mọi bộ đếm để không lẫn đơn vị) */
@@ -1764,6 +1887,26 @@ function renderExtractMonitor(task) {
   const errs = (task.errors || []).map((e) => `<div class="err">❌ ${escapeHtml(e)}</div>`).join('');
   const warns = (task.warnings || []).slice(0, 20).map((w) => `<div class="warn">⚠️ ${escapeHtml(w)}</div>`).join('');
   document.getElementById('dubExtractIssues').innerHTML = errs || warns ? `<div class="extract-issues">${errs}${warns}</div>` : '';
+  const resumeRow = document.getElementById('dubExtractResumeRow');
+  if (resumeRow) {
+    resumeRow.style.display = task.resumable ? 'block' : 'none';
+    const ci = task.checkpointInfo || {};
+    const kept = [];
+    if (ci.asrSegments) kept.push(`kết quả nhận dạng ${ci.asrSegments} đoạn`);
+    else if (ci.audioReady) kept.push('âm thanh đã tách');
+    if (ci.translatedSegments) kept.push(`${ci.translatedSegments} đoạn đã dịch`);
+    document.getElementById('dubExtractResumeInfo').textContent = kept.length
+      ? `Giữ lại: ${kept.join(', ')}. Có thể đổi bộ dịch/model ở trên trước khi chạy tiếp.`
+      : 'Chạy lại từ đầu.';
+  }
+  const logEl = document.getElementById('dubExtractLog');
+  if (logEl) {
+    const atBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 30;
+    logEl.innerHTML = renderLogLines(task.logs) || '<div class="lg-time">Chưa có nhật ký.</div>';
+    if (atBottom) logEl.scrollTop = logEl.scrollHeight;
+    const cnt = document.getElementById('dubExtractLogCount');
+    if (cnt) cnt.textContent = `(${(task.logs || []).length} dòng${task.attempts > 1 ? ` • lần chạy ${task.attempts}` : ''})`;
+  }
 }
 
 function applyExtractResult(data) {
@@ -2107,7 +2250,8 @@ async function cancelActiveDubbingJob() {
 }
 
 async function startDubbingProcess() {
-  const videoPath = document.getElementById('dubVideoSelect')?.value;
+  const dubSrc = getDubVideoSource();
+  const videoPath = dubSrc.videoPath;
   const targetLang = document.getElementById('dubTargetLangSelect')?.value || 'vi';
   const voiceId = document.getElementById('dubVoiceSelect')?.value;
   const originalVolume = parseFloat(document.getElementById('dubOrigVolSlider')?.value ?? '0.8');
@@ -2123,7 +2267,7 @@ async function startDubbingProcess() {
   const cloudConsent = trParams.cloudConsent;
 
   if (!videoPath) {
-    toast('Vui lòng chọn video đã tải cần lồng tiếng!', 'warn');
+    toast(dubSrc.source === 'user' ? 'Vui lòng chọn hoặc dán đường dẫn video nguồn ngoài!' : 'Vui lòng chọn video đã tải cần lồng tiếng!', 'warn');
     return;
   }
   if (!voiceId) {
@@ -2153,6 +2297,8 @@ async function startDubbingProcess() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         videoPath,
+        source: dubSrc.source,
+        outputDir: dubSrc.outputDir || undefined,
         targetLang,
         voiceId,
         originalVolume,
@@ -2224,12 +2370,17 @@ function renderDubJobsList(jobs) {
       const outPath = j.outputPath || j.outputVideoPath || '';
       const outName = j.outputFileName || (outPath ? outPath.split(/[/\\]/).pop() : '') || j.inputFileName || 'Video lồng tiếng';
       const statusMsg = j.statusText || j.step || 'Đang xử lý...';
+      const srcBadge = j.source === 'user' ? `<span class="badge" title="Video do người dùng chọn từ máy">Nguồn: user</span>` : '';
+      const logHtml = (j.logs || []).length
+        ? `<details class="extract-log-box"><summary>📜 Nhật ký (${j.logs.length} dòng)</summary><div class="extract-log">${renderLogLines(j.logs)}</div></details>`
+        : '';
 
       return `
       <div class="dl-item">
         <div class="dl-info">
           <div class="dl-name">
             <span class="cap-pill verified">🎙️ ${escapeHtml(langLabel)} (${escapeHtml(voiceLabel)})</span>
+            ${srcBadge}
             ${escapeHtml(outName)}
           </div>
           <div class="dl-sub">
@@ -2241,6 +2392,7 @@ function renderDubJobsList(jobs) {
           </div>
           ${isDone ? warnHtml : ''}
           ${isRunning ? `<div class="progress-bar"><div class="progress-fill" style="width:${j.progress || 5}%"></div></div>` : ''}
+          ${logHtml}
         </div>
         <div class="dl-actions">
           ${isRunning ? `<button class="btn-danger-sm" data-job="${escapeHtml(j.jobId)}" onclick="cancelDubbingProcess(this.dataset.job)">⏹ Hủy</button>` : ''}
@@ -2249,7 +2401,7 @@ function renderDubJobsList(jobs) {
             isDone && outPath
               ? `
             <button class="btn-sm" data-path="${escapeHtml(outPath)}" data-name="${escapeHtml(outName)}" onclick="playDownloadedVideo(this.dataset.path, this.dataset.name)">▶ Xem thử bản lồng tiếng</button>
-            <button class="btn-sm" data-path="${escapeHtml(outPath)}" onclick="openFileInFinder(this.dataset.path)">📂 Mở thư mục Dubbed</button>
+            <button class="btn-sm" data-path="${escapeHtml(outPath)}" onclick="openFileInFinder(this.dataset.path)">📂 ${j.source === 'user' ? 'Mở thư mục đầu ra' : 'Mở thư mục Dubbed'}</button>
           `
               : ''
           }
