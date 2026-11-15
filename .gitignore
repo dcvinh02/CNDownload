@@ -55,3 +55,7 @@ HANDOFF_ANTIGRAVITY.md
 PHAN_TICH_KHA_NANG_THUC_HIEN.md
 BAO_CAO_NANG_CAP.md
 TAI_LIEU_CONG_CU_VA_HOAT_DONG.md
+
+# Bộ nhớ đệm Python
+__pycache__/
+*.pyc
