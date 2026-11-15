@@ -82,8 +82,6 @@ npm start
 
 ## Bản 1.1.0 — Nâng cấp dịch AI, VieNeu-TTS, âm lượng, quét tài khoản
 
-> Chi tiết kỹ thuật, kết quả kiểm thử và giới hạn còn lại: xem **[BAO_CAO_NANG_CAP.md](BAO_CAO_NANG_CAP.md)**.
-
 - **🤖 Tích hợp AI (tab mới)**: lớp AI Provider dùng chung (`src/ai/ai_provider_manager.js`) với Adapter cho **Google Gemini**, **OpenAI (ChatGPT)** và **API tương thích OpenAI** (DeepSeek, Groq, OpenRouter, LM Studio...). Nhập API Key, kiểm tra kết nối (tải danh sách model thật), chọn nhà cung cấp + model cho từng chức năng, đặt hạn mức request/token mỗi tháng, xem thống kê sử dụng. Key lưu ở `config/ai_secrets.json` (quyền 0600), không bao giờ trả về giao diện.
 - **Dịch lời thoại bằng AI theo phân đoạn** (`src/ai/llm_translator.js`): dùng prompt "phiên dịch viên chuyên nghiệp", gửi từng phân đoạn kèm `id / start / end / speaker_id`, nhận lại JSON và **kiểm tra số lượng, ID, thứ tự**; timestamp luôn lấy từ dữ liệu gốc, không lấy từ AI. Dịch theo lô kèm ngữ cảnh câu trước/sau; tự yêu cầu lại khi sai cấu trúc; phân loại lỗi (key sai, hết hạn mức, rate-limit, mất mạng, JSON hỏng).
 - **🎙️ VieNeu-TTS v3 Turbo** (48 kHz, Apache-2.0) chạy **offline** trên CPU qua SDK chính thức `vieneu` trong môi trường riêng `.venv-vieneu` (Python 3.12). 25 giọng dựng sẵn (Bắc/Trung/Nam), giọng mặc định đề xuất "Hải Đăng"; các giọng Piper/hệ điều hành/Edge cũ vẫn giữ nguyên. Cài/tải từ tab Công cụ.
@@ -156,5 +154,3 @@ npm test
 ```bash
 npm run test:upgrade
 ```
-
-Xem chi tiết kiến trúc và hướng dẫn sử dụng đầy đủ tại **[TAI_LIEU_CONG_CU_VA_HOAT_DONG.md](TAI_LIEU_CONG_CU_VA_HOAT_DONG.md)**.

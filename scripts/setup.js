@@ -40,7 +40,7 @@ function plan() {
   ];
   if (process.platform === 'darwin') core.push({ id: 'webkitSniffer', why: 'Quét Douyin/Kuaishou (cần Xcode Command Line Tools)', optional: true });
   // Dịch Offline: chỉ cài Qwen3.5 9B — bản tốt nhất đã kiểm nghiệm. Argos, Qwen3.5-4B, Qwen2.5-7B, Whisper tiny/base
-  // đã bị loại vì chất lượng kém (BAO_CAO_NANG_CAP.md) nên KHÔNG cài tự động.
+  // đã bị loại vì chất lượng kém (đã kiểm thử) nên KHÔNG cài tự động.
   if (process.platform === 'win32') {
     if (!NO_LLM) core.push({ id: 'localLlmQwen', why: 'AI dịch Local Qwen3.5 9B — dịch Trung→Việt ngay trên máy, không cần API Key' });
   } else if (IS_MAC_ARM && FULL) {

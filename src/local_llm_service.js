@@ -48,7 +48,7 @@ LLAMA_CPP.serverBin = path.join(LLAMA_CPP.dir, IS_WIN ? 'llama-server.exe' : 'll
 LLAMA_CPP.asset = LLAMA_CPP.assets[process.arch] || null;
 LLAMA_CPP.url = LLAMA_CPP.asset ? `https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_CPP.build}/${LLAMA_CPP.asset.name}` : '';
 
-// Chỉ giữ model đã được đánh giá tốt nhất cho dịch Trung → Việt (xem BAO_CAO_NANG_CAP.md, mục đánh giá Qwen).
+// Chỉ giữ model đã được đánh giá tốt nhất cho dịch Trung → Việt.
 // Qwen3.5-4B (sai nghĩa, hay sót chữ Hán) và Qwen2.5-7B (chép nguyên câu nguồn) đã bị loại sau kiểm thử.
 const ALL_MODELS = [
   {
