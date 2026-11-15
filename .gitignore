@@ -63,3 +63,6 @@ __pycache__/
 # Lối tắt tới thư mục Qwen dùng chung (tạo trên máy Windows)
 Qwen Local.lnk
 QwenLocal/
+
+# Lựa chọn thành phần lúc cài (riêng từng máy)
+config/setup_choices.json

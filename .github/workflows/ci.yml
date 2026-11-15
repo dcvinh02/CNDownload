@@ -35,9 +35,9 @@ jobs:
             QwenLocal
           key: ai-${{ runner.os }}-${{ hashFiles('requirements/*.txt', 'src/tool_installer.js', 'src/python_env.js', 'src/qwen_shared_home.js') }}
 
-      # Windows: cài cả AI dịch Local Qwen3.5 9B (llama.cpp, chạy CPU trên máy CI) — giống máy người dùng
+      # Máy kiểm thử cài TẤT CẢ thành phần (--all) kể cả AI dịch Local Qwen3.5 9B; người dùng thật được hỏi từng mục
       - name: Cài thành phần AI (Python 3.12, model) như máy mới
-        run: node scripts/setup.js --yes
+        run: node scripts/setup.js --all
 
       - name: Kiểm tra cài đặt
         run: node scripts/setup.js --check

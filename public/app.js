@@ -2935,19 +2935,68 @@ async function loadInstallableToolsCatalog() {
   }
 }
 
+const REC_STYLE = {
+  required: 'background:#ecfdf5;border-color:#a7f3d0;color:#047857;',
+  recommended: 'background:#ecfdf5;border-color:#a7f3d0;color:#047857;',
+  optional: 'background:#f1f5f9;border-color:#cbd5e1;color:#334155;',
+  not_needed: 'background:#fff7ed;border-color:#fed7aa;color:#9a3412;'
+};
+function fmtComponentSize(mb) {
+  if (mb === null || mb === undefined) return '?';
+  if (mb >= 1000) return `${(mb / 1000).toFixed(1)} GB`;
+  if (mb < 1) return '< 1 MB';
+  return `${Math.round(mb)} MB`;
+}
+/** Nút trên thanh trên cùng: số thành phần đã cài / tổng */
+async function refreshComponentsBadge() {
+  try {
+    const data = await (await fetch('/api/tools/catalog')).json();
+    if (!data.success) return;
+    const tools = data.tools || [];
+    const n = tools.filter((t) => t.installed).length;
+    const el = document.getElementById('componentsBadgeText');
+    if (el) el.textContent = `${n}/${tools.length} đã cài`;
+  } catch (_) {}
+}
+
 function renderToolInstallerList(tools) {
   const list = document.getElementById('installerToolsList');
   if (!list) return;
+
+  const nInstalled = tools.filter((t) => t.installed).length;
+  const missing = tools.filter((t) => !t.installed);
+  const missingRec = missing.filter((t) => t.recommendation && ['required', 'recommended'].includes(t.recommendation.level));
+  const sumEl = document.getElementById('installerSummary');
+  if (sumEl) {
+    sumEl.innerHTML =
+      `Đã cài <strong>${nInstalled}/${tools.length}</strong> thành phần` +
+      (missing.length ? ` • chưa cài ${missing.length} (tổng ~${fmtComponentSize(missing.reduce((m, t) => m + (t.diskSizeMB || 0), 0))})` : ' • đầy đủ') +
+      (missingRec.length ? ` • <span style="color:#047857;">khuyến nghị cài: ${missingRec.map((t) => escapeHtml(t.name.split(' (')[0])).join(', ')}</span>` : '');
+  }
+  const badge = document.getElementById('componentsBadgeText');
+  if (badge) badge.textContent = `${nInstalled}/${tools.length} đã cài`;
 
   if (tools.length === 0) {
     list.innerHTML = `<div class="empty-hint">Tất cả công cụ và mô hình AI đều đã sẵn sàng trên hệ thống!</div>`;
     return;
   }
+  const order = { required: 0, recommended: 1, optional: 2, not_needed: 3 };
+  tools = tools
+    .slice()
+    .sort((a, b) => Number(a.installed) - Number(b.installed) || (order[a.recommendation?.level] ?? 2) - (order[b.recommendation?.level] ?? 2));
 
   list.innerHTML = tools
     .map((t) => {
       const isInstalled = Boolean(t.installed);
-      const sizeText = t.estimatedSizeMB ? `${t.estimatedSizeMB} MB` : 'N/A';
+      const sizeText = fmtComponentSize(t.diskSizeMB ?? t.estimatedSizeMB);
+      const rec = t.recommendation || {};
+      const recHtml = rec.label
+        ? `<div style="margin-top:5px;font-size:12px;padding:5px 8px;border:1px solid;border-radius:6px;${REC_STYLE[rec.level] || ''}"><strong>Khuyến nghị: ${escapeHtml(rec.label)}</strong> — ${escapeHtml(rec.text || '')}</div>`
+        : '';
+      const depHtml = (t.requires || []).length && !isInstalled
+        ? `<div style="font-size:11.5px;color:#64748b;margin-top:3px;">Cần có trước: ${(t.requires || []).map((d) => escapeHtml((tools.find((x) => x.id === d) || { name: d }).name.split(' (')[0])).join(', ')}</div>`
+        : '';
+      const declinedHtml = t.userDeclined ? `<span class="badge" title="Bạn đã chọn không cài lúc cài đặt">Đã chọn bỏ qua lúc cài</span>` : '';
       return `
         <div class="tool-install-item" id="toolCard_${escapeHtml(t.id)}">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
@@ -2956,15 +3005,18 @@ function renderToolInstallerList(tools) {
                 <span style="font-size:14px;font-weight:700;color:#0f172a;">${escapeHtml(t.name)}</span>
                 <span class="badge primary">${escapeHtml(t.category || 'Công cụ')}</span>
                 <span class="cap-pill ${isInstalled ? 'verified' : 'missing_tool'}">
-                  ${isInstalled ? '✓ Đã sẵn sàng' : '⚠️ Chưa cài đặt'}
+                  ${isInstalled ? '✓ Đã cài' : '⬜ Chưa cài'}
                 </span>
+                ${declinedHtml}
               </div>
-              <div style="font-size:12px;color:#475569;margin-top:3px;">
-                ${escapeHtml(t.description || '')}
+              <div style="font-size:12.5px;color:#0f172a;margin-top:4px;">
+                <strong>Tác dụng:</strong> ${escapeHtml(t.purpose || t.description || '')}
               </div>
+              ${recHtml}
+              ${depHtml}
               <div style="display:flex;gap:12px;flex-wrap:wrap;font-size:11.5px;color:#64748b;margin-top:4px;">
+                <span>📦 Dung lượng: <strong>~${sizeText}</strong></span>
                 <span>🌐 Nguồn chính thức: <strong>${escapeHtml(t.officialProvider || 'Official')}</strong></span>
-                <span>📦 Ước tính: <strong>${sizeText}</strong></span>
                 <span>📜 Giấy phép: <strong>${escapeHtml(t.license || 'Open Source')}</strong></span>
               </div>
             </div>
@@ -3341,6 +3393,7 @@ document.addEventListener('DOMContentLoaded', () => {
     onDubVolumeInput();
   } catch (_) {}
   loadAiConfig(true);
+  refreshComponentsBadge();
 });
 
 

@@ -19,8 +19,8 @@ if not exist "node_modules\express" (
 
 node scripts\setup.js --check >nul 2>nul
 if errorlevel 1 (
-  echo [2/2] Dang cai cac thanh phan AI ^(Python, model^) - chi lam 1 lan, can Internet...
-  node scripts\setup.js --yes
+  echo [2/2] Chon cac thanh phan AI can cai ^(Python, model^) - moi muc deu hoi truoc, can Internet...
+  node scripts\setup.js
   if errorlevel 1 goto :fail
   if not exist "%USERPROFILE%\Desktop\CN Video Scraper Pro.lnk" call "%~dp0Tao_Shortcut_Desktop.bat" --quiet
 )

@@ -796,6 +796,38 @@ async function main() {
     return `"${String(det.desc || '').slice(0, 30)}" • ${urls.length} link phát`;
   });
 
+  console.log('\n--- [4a1] Cài đặt theo lựa chọn: tác dụng, dung lượng, khuyến nghị từng thành phần ---');
+  await check('Khuyến nghị theo máy: có API Key → không cần Qwen; đã chọn VieNeu → không cần Piper; RAM thấp → không khuyến nghị Qwen', async () => {
+    const g = require('../src/component_guide');
+    const q1 = g.recommend('localLlmQwen', { hasCloudAiKey: true, ramGB: 32 });
+    const q2 = g.recommend('localLlmQwen', { hasCloudAiKey: false, ramGB: 8 });
+    const q3 = g.recommend('localLlmQwen', { hasCloudAiKey: false, ramGB: 32 });
+    const p1 = g.recommend('localTts', { selected: new Set(['vieneuTts']) });
+    const p2 = g.recommend('localTts', { selected: new Set() });
+    assert(q1.level === 'not_needed' && /API Key/.test(q1.text), JSON.stringify(q1));
+    assert(q2.level === 'optional' && /RAM/.test(q2.text), JSON.stringify(q2));
+    assert(q3.level === 'optional', JSON.stringify(q3));
+    assert(p1.level === 'not_needed' && p2.level === 'recommended', `${p1.level}/${p2.level}`);
+    const cat = require('../src/tool_installer').getInstallableToolsCatalog();
+    const bad = cat.filter((t) => !t.purpose || !t.recommendation || !t.recommendation.label || !(t.diskSizeMB > 0));
+    assert(bad.length === 0, `thiếu thông tin: ${bad.map((t) => t.id).join(', ')}`);
+    return `${cat.length} thành phần đều có tác dụng + dung lượng + khuyến nghị • Qwen: có key → "${q1.label}", RAM 8 GB → "${q2.label}"`;
+  });
+  await check('Ghi nhớ thành phần đã từ chối: setup --check không đòi cài lại; cài từ app thì bỏ khỏi danh sách từ chối', async () => {
+    const g = require('../src/component_guide');
+    g.saveChoices({ declined: ['speakerDiarization', 'localLlmQwen'] });
+    assert(g.loadChoices().declined.length === 2, 'không lưu được lựa chọn');
+    g.clearDeclined('localLlmQwen');
+    assert(JSON.stringify(g.loadChoices().declined) === '["speakerDiarization"]', JSON.stringify(g.loadChoices()));
+    const ann = g.annotate([{ id: 'speakerDiarization', installed: false, name: 'x' }]);
+    assert(ann[0].userDeclined === true, 'phải đánh dấu đã từ chối');
+    const r = spawnSync(process.execPath, ['scripts/setup.js', '--check'], { cwd: path.join(__dirname, '..'), env: { ...process.env }, encoding: 'utf8', timeout: 120000 });
+    const out = r.stdout || '';
+    assert(/Đã cài \d+\/\d+ thành phần/.test(out), `setup --check không in số thành phần: ${out.slice(0, 300)}`);
+    g.saveChoices({ declined: [] });
+    return `lưu/xóa lựa chọn OK • setup --check: "${(out.match(/Đã cài \d+\/\d+ thành phần/) || [''])[0]}" (mã thoát ${r.status})`;
+  });
+
   console.log('\n--- [4a2] Chia câu & kiểm tra bản dịch tiếng Trung ---');
   await check('Dấu câu cỡ nhỏ của Whisper (﹐ ﹒ ﹖ …) được quy về dấu chuẩn để chia câu (lỗi đoạn 13 giây gộp nhiều câu)', async () => {
     if (!fs.existsSync(PY_CORE)) throw skip('Chưa cài môi trường Python lõi.', true);

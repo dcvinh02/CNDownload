@@ -32,6 +32,7 @@
         <span class="status-dot" id="engineStatusDot"></span>
         <span id="engineStatusText">Đang kiểm tra công cụ...</span>
       </div>
+      <button class="btn-outline" id="componentsBadgeBtn" onclick="openToolInstallerModal()" title="Môi trường & model AI đã cài / tổng số — bấm để xem tác dụng, dung lượng và cài thêm">🧩 Thành phần: <span id="componentsBadgeText">…</span></button>
       <button class="btn-outline" id="missingToolsBtn" style="display:none;border-color:#fca5a5;background:#fef2f2;color:#991b1b;" onclick="openToolInstallerModal()">
         ⚠️ Tải công cụ thiếu (<span id="missingToolsCount">0</span>)
       </button>
@@ -827,7 +828,7 @@
     <div class="modal-card" style="max-width:920px;">
       <div class="modal-header">
         <div>
-          <div style="font-size:16px;font-weight:700;">📦 Tải & Cài đặt Công cụ / Mô hình AI Còn thiếu</div>
+          <div style="font-size:16px;font-weight:700;">🧩 Thành phần đã cài & cài thêm (môi trường / model AI)</div>
           <div style="font-size:12px;color:#64748b;">Tải từ nguồn chính thức • Kiểm tra tính toàn vẹn SHA-256 • Kiểm tra phiên bản thực tế • Giữ nguyên các chức năng độc lập khác</div>
         </div>
         <button class="btn-sm" onclick="closeToolInstallerModal()">✕ Đóng</button>
@@ -836,6 +837,7 @@
         <div style="font-size:12px;color:#475569;background:#f8fafc;padding:10px 14px;border-radius:8px;border:1px solid #e2e8f0;">
           💡 <strong>Cam kết minh bạch:</strong> Ứng dụng không bao giờ tải hoặc thực thi binary âm thầm. Bạn luôn được biết rõ tên công cụ, nguồn tải chính thức, dung lượng và yêu cầu phần cứng trước khi bấm cài đặt.
         </div>
+        <div id="installerSummary" style="font-size:12.5px;color:#0f172a;font-weight:600;"></div>
         <div id="installerToolsList" style="display:flex;flex-direction:column;gap:12px;"></div>
       </div>
     </div>

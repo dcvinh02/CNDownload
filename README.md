@@ -38,7 +38,7 @@ Kho mã nguồn chỉ chứa **mã nguồn (~2 MB)**. Môi trường Python, mod
 
 ### Windows
 1. Tải mã nguồn (GitHub: *Code → Download ZIP*, hoặc gói `CNVideoScraperPro-source-*.zip` từ Drive) và giải nén — nên đặt ở đường dẫn ngắn, ví dụ `C:\CNVideo`.
-2. Nhấp đúp **`Start_App_Windows.bat`**. Lần đầu file này tự chạy `npm install` và `scripts/setup.js` (tạo Python 3.12 riêng, tải model ~2,3 GB **+ AI dịch Local Qwen3.5 9B ~5,8 GB**), các lần sau mở thẳng ứng dụng. Không cần quyền Administrator. Qwen được cài vào thư mục người dùng `%USERPROFILE%\QwenLocal` để các ứng dụng khác dùng chung (xem mục 5).
+2. Nhấp đúp **`Start_App_Windows.bat`**. Lần đầu, cửa sổ cài đặt **hỏi từng thành phần** (môi trường / model): tác dụng, dung lượng, khuyến nghị cho máy bạn — chỉ tải những gì bạn đồng ý (Enter = theo khuyến nghị). Ví dụ đã có API Key Gemini/ChatGPT thì không cần cài Qwen (~5,8 GB). Thành phần bỏ qua có thể cài sau trong app: nút **🧩 Thành phần** trên thanh trên cùng. Lần đầu file này tự chạy `npm install` rồi `scripts/setup.js`; các lần sau mở thẳng ứng dụng (không hỏi lại mục đã bỏ qua). Không cần quyền Administrator. Nếu chọn cài Qwen, Qwen được cài vào thư mục người dùng `%USERPROFILE%\QwenLocal` để các ứng dụng khác dùng chung (xem mục 5).
 3. **Mở ứng dụng:** chạy xong, app **tự mở** trong một cửa sổ riêng (Edge/Chrome dạng ứng dụng). Lần cài đầu tạo sẵn lối tắt **"CN Video Scraper Pro"** trên Desktop — các lần sau nhấp đúp lối tắt đó (hoặc `Start_App_Windows.bat`). Thiếu lối tắt: chạy `Tao_Shortcut_Desktop.bat`.
    - Cửa sổ dòng lệnh màu đen là máy chủ của app: **giữ nó mở** khi dùng; đóng nó hoặc đóng cửa sổ app là tắt ứng dụng.
    - Cửa sổ app không hiện ra: mở trình duyệt và vào `http://127.0.0.1:3889`.
@@ -49,7 +49,7 @@ Kho mã nguồn chỉ chứa **mã nguồn (~2 MB)**. Môi trường Python, mod
 ### macOS
 ```bash
 npm install --omit=dev
-npm run setup          # thêm AI Local Qwen (Mac chip Apple): npm run setup:full
+npm run setup          # hỏi từng thành phần: tác dụng, dung lượng, khuyến nghị — chỉ tải mục bạn đồng ý
 npm start
 ```
 
@@ -57,7 +57,10 @@ npm start
 | Lệnh | Tác dụng |
 |---|---|
 | `npm run setup:check` | Kiểm tra thành phần còn thiếu (không tải gì) |
-| `npm run setup` | Cài thành phần còn thiếu (bỏ qua cái đã có) |
+| `npm run setup` | Hỏi & cài từng thành phần còn thiếu (bỏ qua cái đã có / đã chọn không cài) |
+| `node scripts/setup.js --ask-again` | Hỏi lại cả những thành phần trước đây đã chọn không cài |
+| `node scripts/setup.js --yes` | Không hỏi: chỉ cài các thành phần được khuyến nghị cho máy này |
+| `node scripts/setup.js --all` | Không hỏi: cài tất cả (máy kiểm thử) |
 | `npm run pack` | Tạo `dist/CNVideoScraperPro-source-*.zip` (chỉ mã nguồn) để đưa lên Drive |
 | `npm run pack:models -- --no-llm` | Tạo gói model dùng chung Windows/macOS để máy khác khỏi tải lại (giải nén vào thư mục dự án trước khi chạy setup) |
 

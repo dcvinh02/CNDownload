@@ -194,7 +194,7 @@ function resolveOfficialToolSource(toolId, platform = process.platform, arch = p
     },
     pythonCore: {
       id: 'pythonCore',
-      name: 'Môi trường Python AI (bắt buộc cho nhận dạng giọng nói, tách giọng, TTS)',
+      name: 'Môi trường Python AI (nền tảng cho nhận dạng giọng nói, tách giọng, giọng đọc)',
       category: 'Nền tảng',
       officialProvider: 'uv (astral-sh) + Python 3.12 độc lập + gói PyPI trong requirements/core.txt',
       license: 'MIT / Apache-2.0',
@@ -571,6 +571,11 @@ async function verifyInstalledToolOrModel(toolId) {
  * Danh sách tất cả công cụ / mô hình có thể kiểm tra và cài đặt
  */
 function getInstallableToolsCatalog() {
+  // Gắn tác dụng / dung lượng thật / khuyến nghị theo máy / thành phần người dùng đã từ chối (dùng chung với setup.js)
+  return require('./component_guide').annotate(getInstallableToolsCatalogRaw());
+}
+
+function getInstallableToolsCatalogRaw() {
   // Không liệt kê Argos (localNmt) và Whisper tiny (localAsr): đã kiểm nghiệm chất lượng kém, thay bằng Qwen3.5 9B / Whisper small.
   const ids = ['pythonCore', 'ytdlp', 'ffmpeg', 'webkitSniffer', 'localAsrSmall', 'speakerDiarization', 'voiceSeparation', 'localLlmQwen', 'localTts', 'vieneuTts'];
   const modelsStatus = getLocalModelsStatus();
@@ -586,9 +591,9 @@ function getInstallableToolsCatalog() {
         return { ...spec, os: process.platform, arch: process.arch, installed: Boolean(ff && fs.existsSync(ff)), activePath: ff, currentSizeBytes: 0 };
       }
       if (id === 'pythonCore') {
+        // Môi trường Python độc lập với model: người dùng có thể cài Python nhưng không cài Whisper
         const py = pyEnv.venvPython(pyEnv.VENVS.core);
-        const st = getLocalModelsStatus();
-        return { ...spec, os: process.platform, arch: process.arch, installed: fs.existsSync(py) && Boolean(st.localAsr), currentSizeBytes: 0 };
+        return { ...spec, os: process.platform, arch: process.arch, installed: fs.existsSync(py), currentSizeBytes: 0 };
       }
       if (id === 'localLlmQwen') {
         const st = localLlm.getStatus();
@@ -632,6 +637,10 @@ function startToolInstallJob({ toolId, userConfirmed = false, qwenLocation = nul
       'Cần sự xác nhận rõ ràng của người dùng (userConfirmed = true) trước khi tải và cài đặt công cụ hoặc mô hình.'
     );
   }
+  // Người dùng chủ động cài → bỏ khỏi danh sách "đã từ chối" lúc cài đặt
+  try {
+    require('./component_guide').clearDeclined(toolId);
+  } catch (_) {}
   // Windows: chọn nơi cài Qwen (ổ C ít chỗ → phải hỏi người dùng: ổ C hay thư mục ứng dụng)
   if (toolId === 'localLlmQwen' && process.platform === 'win32') {
     const qh = require('./qwen_shared_home');
