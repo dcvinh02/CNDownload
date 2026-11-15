@@ -403,7 +403,8 @@ async function installWindowsApp(job) {
     }
     job.progress = 55;
     job.step = 'Đang lấy 3 thư viện cần thiết từ gói WebView2 (~1 MB)...';
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cn_wv2_'));
+    // Giải nén ngay trong thư mục app (cùng ổ đĩa): thư mục tạm của Windows thường ở ổ C, đổi tên file sang ổ khác sẽ lỗi EXDEV
+    const tmp = fs.mkdtempSync(path.join(WINDOWS_APP_DIR, '.tmp_'));
     try {
       const zip = path.join(tmp, 'sdk.zip');
       fs.renameSync(pkg, zip);
