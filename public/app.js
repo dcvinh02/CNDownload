@@ -335,11 +335,121 @@ async function pasteClipboard() {
   }
 }
 
+/* ---------- Tải nhiều link video riêng lẻ ---------- */
+function extractAllLinksClient(text) {
+  const found = String(text || '').match(/https?:\/\/[^\s"'<>，。！？、；：（）【】《》「」]+/gi) || [];
+  return Array.from(new Set(found.map((u) => u.replace(/[),.;!?\]}>]+$/, '')).filter(Boolean)));
+}
+function updateMultiLinkCount() {
+  const n = extractAllLinksClient(document.getElementById('multiLinkInput')?.value).length;
+  const el = document.getElementById('multiLinkCount');
+  if (el) el.textContent = `${n} link (đã bỏ trùng)`;
+  const btn = document.getElementById('multiLinkStartBtn');
+  if (btn) btn.textContent = n > 0 ? `🚀 Tải tất cả (${n})` : '🚀 Tải tất cả';
+}
+let activeLinkBatchId = null;
+let linkBatchTimer = null;
+async function startMultiLinkDownload() {
+  const text = document.getElementById('multiLinkInput')?.value || '';
+  const links = extractAllLinksClient(text);
+  if (links.length === 0) return toast('Chưa có link nào — dán mỗi dòng 1 link video.', 'warn');
+  if (activeLinkBatchId) return toast('Đang có một lô tải chạy — hãy chờ hoặc bấm Dừng.', 'warn');
+  try {
+    const res = await fetch('/api/link-batch/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        links,
+        outputFormat: document.getElementById('multiLinkFormat')?.value || 'mp4',
+        concurrency: parseInt(document.getElementById('multiLinkConcurrency')?.value || '2', 10)
+      })
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Không bắt đầu được');
+    activeLinkBatchId = data.batch.batchId;
+    document.getElementById('multiLinkCancelBtn').style.display = 'inline-flex';
+    renderLinkBatch(data.batch);
+    toast(`📦 Đã đưa ${data.batch.total} link vào hàng tải (${data.batch.concurrency} link chạy cùng lúc).`);
+    if (linkBatchTimer) clearInterval(linkBatchTimer);
+    linkBatchTimer = setInterval(pollLinkBatch, 1200);
+  } catch (e) {
+    toast('Lỗi tải nhiều link: ' + e.message, 'error');
+  }
+}
+async function pollLinkBatch() {
+  if (!activeLinkBatchId) return;
+  try {
+    const d = await (await fetch(`/api/link-batch/status?batchId=${encodeURIComponent(activeLinkBatchId)}`)).json();
+    if (!d.success) return;
+    const prevDone = window.__lastLinkBatchDone || 0;
+    renderLinkBatch(d.batch);
+    if (d.batch.done !== prevDone) loadDownloads();
+    window.__lastLinkBatchDone = d.batch.done;
+    if (d.batch.status !== 'running') {
+      clearInterval(linkBatchTimer);
+      linkBatchTimer = null;
+      activeLinkBatchId = null;
+      window.__lastLinkBatchDone = 0;
+      document.getElementById('multiLinkCancelBtn').style.display = 'none';
+      const c = d.batch.counts || {};
+      toast(`📦 Lô tải xong: ${c.completed || 0} thành công, ${c.failed || 0} lỗi${c.cancelled ? `, ${c.cancelled} đã hủy` : ''}.`, c.failed ? 'warn' : undefined);
+      loadDownloads();
+    }
+  } catch (_) {}
+}
+async function cancelMultiLinkDownload() {
+  if (!activeLinkBatchId) return;
+  await fetch('/api/link-batch/cancel', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ batchId: activeLinkBatchId })
+  });
+  toast('🛑 Đang dừng lô tải...', 'warn');
+  pollLinkBatch();
+}
+function renderLinkBatch(b) {
+  const sum = document.getElementById('multiLinkSummary');
+  const wrap = document.getElementById('multiLinkResults');
+  if (!b || !wrap) return;
+  const c = b.counts || {};
+  if (sum) {
+    sum.innerHTML = `<strong>${b.done}/${b.total}</strong> xong • ✅ ${c.completed || 0} thành công • ❌ ${c.failed || 0} lỗi • ⬇️ ${c.downloading || 0} đang tải • 🔍 ${c.analyzing || 0} đang phân tích • ⏳ ${c.pending || 0} chờ${c.cancelled ? ` • 🛑 ${c.cancelled} đã hủy` : ''}`;
+  }
+  const icon = { pending: '⏳', analyzing: '🔍', downloading: '⬇️', completed: '✅', failed: '❌', cancelled: '🛑' };
+  wrap.innerHTML = b.items
+    .map((it) => {
+      const name = it.title || it.url;
+      let sub = '';
+      if (it.status === 'pending') sub = 'Đang chờ lượt';
+      else if (it.status === 'analyzing') sub = 'Đang phân tích link...';
+      else if (it.status === 'downloading') sub = `${it.progress || 0}% • ${escapeHtml(it.speedText || '')}${it.quality ? ` • ${escapeHtml(it.quality)}` : ''}`;
+      else if (it.status === 'completed') sub = `Đã lưu: ${escapeHtml(it.outputPath || '')}${it.partialWarning ? `<br><span style="color:#d97706;">⚠️ ${escapeHtml(it.partialWarning)}</span>` : ''}`;
+      else sub = `<span style="color:#b91c1c;">${escapeHtml(it.error || '')}</span>`;
+      return `<div class="dl-item"><div class="dl-info">
+          <div class="dl-name">${icon[it.status] || '•'} <span class="dl-platform-tag">${escapeHtml(it.platformName || '?')}</span> #${it.index} ${escapeHtml(name)}</div>
+          <div class="dl-sub" style="word-break:break-all;">${sub}</div>
+          ${it.status === 'downloading' ? `<div class="progress-bar"><div class="progress-fill" style="width:${it.progress || 3}%"></div></div>` : ''}
+        </div></div>`;
+    })
+    .join('');
+}
+
 async function analyzeVideo() {
   const rawInput = document.getElementById('urlInput').value.trim();
   if (!rawInput) {
     toast('Vui lòng dán link hoặc văn bản chia sẻ video!', 'warn');
     return;
+  }
+  // Dán nhiều link vào ô đơn → chuyển sang tải hàng loạt
+  const multi = extractAllLinksClient(rawInput);
+  if (multi.length >= 2) {
+    const panel = document.getElementById('multiLinkPanel');
+    const ta = document.getElementById('multiLinkInput');
+    if (panel) panel.open = true;
+    if (ta) ta.value = multi.join('\n');
+    updateMultiLinkCount();
+    toast(`Phát hiện ${multi.length} link — chuyển sang "Tải nhiều link cùng lúc".`);
+    return startMultiLinkDownload();
   }
 
   const btn = document.getElementById('analyzeBtn');

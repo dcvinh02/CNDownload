@@ -53,6 +53,7 @@ const {
   getMultiAccountScanStatus,
   cancelMultiAccountScan
 } = require('./account_scanner');
+const { startLinkBatch, getLinkBatch, cancelLinkBatch } = require('./link_batch');
 const {
   VOICE_CATALOG,
   LOCAL_MODELS_CATALOG,
@@ -597,6 +598,24 @@ function createServer() {
     const { jobId } = req.body || {};
     const cancelRes = cancelDubbingJob(jobId);
     res.json({ success: Boolean(cancelRes.success), cancelled: Boolean(cancelRes.cancelled), ...cancelRes });
+  });
+
+  // --- TẢI NHIỀU LINK VIDEO RIÊNG LẺ ---
+  app.post('/api/link-batch/start', (req, res) => {
+    try {
+      const { text, links, outputFormat, concurrency } = req.body || {};
+      res.json({ success: true, batch: startLinkBatch({ text, links, outputFormat, concurrency }) });
+    } catch (err) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+  app.get('/api/link-batch/status', (req, res) => {
+    const batch = getLinkBatch(req.query.batchId);
+    if (!batch) return res.status(404).json({ success: false, error: 'Không tìm thấy lô tải.' });
+    res.json({ success: true, batch });
+  });
+  app.post('/api/link-batch/cancel', (req, res) => {
+    res.json(cancelLinkBatch((req.body || {}).batchId));
   });
 
   // --- PHÂN TÍCH & TẢI VIDEO ĐƠN ---

@@ -796,6 +796,31 @@ async function main() {
     return `"${String(det.desc || '').slice(0, 30)}" • ${urls.length} link phát`;
   });
 
+  /* ---------------- 4b1. Tải nhiều link video riêng lẻ ---------------- */
+  console.log('\n--- [4b1] Tải nhiều link cùng lúc (mạng thật) ---');
+  await check('Tải nhiều link: bỏ trùng, tải đúng video thật, link không tồn tại báo lỗi (không tải nhầm clip tĩnh của trang)', async () => {
+    const lb = require('../src/link_batch');
+    const good = 'https://www.douyin.com/video/7702399097798785014';
+    const bad = 'https://www.douyin.com/video/1234567890123456789';
+    const b0 = lb.startLinkBatch({ text: `${good}\n3.2 复制打开抖音 ${good} 看看\n${bad}`, concurrency: 2 });
+    assert(b0.total === 2, `phải bỏ link trùng: total=${b0.total}`);
+    let b;
+    for (let i = 0; i < 480; i++) {
+      b = lb.getLinkBatch(b0.batchId);
+      if (b.status !== 'running') break;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    assert(b.status === 'completed', `lô chưa xong: ${b.status}`);
+    const g = b.items.find((x) => x.url === good);
+    const x = b.items.find((x) => x.url === bad);
+    if (g.status !== 'completed') throw skip(`Douyin không trả video cho máy này: ${g.error || g.status}`, true);
+    const probe = spawnSync(FFMPEG, ['-hide_banner', '-i', g.outputPath], { encoding: 'utf8' }).stderr || '';
+    const dur = Number(((probe.match(/Duration: (\d+):(\d+):([\d.]+)/) || []).slice(1).reduce((a, v, k) => a + Number(v) * [3600, 60, 1][k], 0)) || 0);
+    assert(dur > 100 && /Audio:/.test(probe), `video tải về sai: ${dur}s, audio=${/Audio:/.test(probe)}`);
+    assert(x.status === 'failed' && x.error, `link không tồn tại phải báo lỗi, thực tế: ${x.status} ${x.outputPath || ''}`);
+    return `2/3 link (bỏ 1 trùng) • video thật ${dur.toFixed(1)}s có tiếng • link sai: "${String(x.error).slice(0, 80)}"`;
+  });
+
   /* ---------------- 4b2. Quét trang cá nhân: chỉ video của chủ trang ---------------- */
   console.log('\n--- [4b2] Quét trang cá nhân (mạng thật) ---');
   const waitScan = async (sc, id) => {

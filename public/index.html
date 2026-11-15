@@ -76,7 +76,7 @@
                 type="text"
                 id="urlInput"
                 class="url-input"
-                placeholder="Chỉ cần dán 1 link bất kỳ (Douyin, Kuaishou, Bilibili.com/Bilibili.tv, Xiaohongshu, Youku, Pipixia...)"
+                placeholder="Dán 1 link (Douyin, Kuaishou, Bilibili, Xiaohongshu, Youku, Pipixia...) — dán nhiều link sẽ tự chuyển sang tải hàng loạt"
                 autocomplete="off"
               />
               <button class="paste-btn" onclick="pasteClipboard()">📋 Dán</button>
@@ -86,6 +86,31 @@
               <span id="analyzeText">Trích xuất & Tải</span>
             </button>
           </div>
+
+          <details class="multi-scan-panel" id="multiLinkPanel" style="margin:4px 0 10px;">
+            <summary>📦 Tải nhiều link cùng lúc (dán nhiều link riêng lẻ — mỗi dòng 1 link hoặc cả đoạn chia sẻ)</summary>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;align-items:flex-start;">
+              <textarea id="multiLinkInput" rows="5" class="folder-input" style="flex:1 1 380px;min-height:96px;" oninput="updateMultiLinkCount()" placeholder="https://v.douyin.com/xxxx/&#10;https://www.bilibili.com/video/BV1xxxx&#10;https://www.kuaishou.com/short-video/3xxxx&#10;(có thể dán nguyên đoạn văn bản chia sẻ từ app — tự lọc ra link, bỏ trùng)"></textarea>
+              <div style="display:flex;flex-direction:column;gap:6px;min-width:190px;">
+                <span id="multiLinkCount" style="font-size:12px;font-weight:700;color:#0f172a;">0 link</span>
+                <select id="multiLinkFormat" class="folder-input" style="height:32px;">
+                  <option value="mp4">Định dạng: .MP4 (H.264)</option>
+                  <option value="mov">Định dạng: .MOV</option>
+                  <option value="mkv">Định dạng: .MKV</option>
+                  <option value="mp3">Định dạng: .MP3 (Âm thanh)</option>
+                </select>
+                <label style="font-size:12px;color:#334155;">Tải đồng thời:
+                  <select id="multiLinkConcurrency" class="folder-input" style="width:64px;height:30px;display:inline-block;">
+                    <option value="1">1</option><option value="2" selected>2</option><option value="3">3</option>
+                  </select>
+                </label>
+                <button class="btn-primary" style="height:36px;" id="multiLinkStartBtn" onclick="startMultiLinkDownload()">🚀 Tải tất cả</button>
+                <button class="btn-danger-sm" id="multiLinkCancelBtn" style="display:none;" onclick="cancelMultiLinkDownload()">⏹ Dừng lô tải</button>
+              </div>
+            </div>
+            <div id="multiLinkSummary" style="font-size:12px;color:#334155;margin-top:8px;"></div>
+            <div id="multiLinkResults" class="downloads-list" style="margin-top:6px;"></div>
+          </details>
 
           <div class="method-bar">
             <div class="method-group">

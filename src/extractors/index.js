@@ -69,6 +69,9 @@ function isPlaceholderMedia(src = '') {
   } catch (_) {
     return true;
   }
+  // Tài nguyên tĩnh của giao diện web (vd. Douyin lf-douyin-pc-web.douyinstatic.com/obj/douyin-pc-web/uuu_265.mp4 — clip 2,6 s
+  // không tiếng khi link video không tồn tại): không phải video người dùng
+  if (/static/i.test(parsed.hostname) || /\/(static|assets?)\//i.test(parsed.pathname)) return true;
   // Link thống kê/quảng cáo (vd. WeTV h.trace.qq.com/bosskv?...) có thể chứa ".mp4" trong tham số nhưng không phải video
   if (/(^|\.)(trace|beacon|log|logs|stat|stats|report|analytics|mcs)\./i.test(parsed.hostname) || /bosskv|beacon|\/report\b|\/log\b/i.test(parsed.pathname)) return true;
   const l = u.toLowerCase();
@@ -963,10 +966,42 @@ function getDownloadsList() {
   };
 }
 
+/**
+ * Tải 1 link theo đúng quy trình của nút "Trích xuất & Tải" trên giao diện:
+ * phân tích link → chọn luồng mặc định (tốt nhất) → tải & xác minh.
+ * Dùng cho tải nhiều link và hàng đợi tải hàng loạt (không đưa thẳng link trang cho yt-dlp — Douyin sẽ đòi cookie).
+ */
+async function downloadFromLink({ url, outputFormat = 'mp4', cookie = '', analysis = null } = {}) {
+  const r = analysis || (await analyzeVideo({ rawInput: url, cookie }));
+  const info = r.data || {};
+  const streams = info.formats || [];
+  const chosen = streams[0] || null;
+  if (!chosen && !info.directVideoUrl && !r.resolvedUrl) {
+    throw new Error('Không tìm thấy luồng video tải được từ link này.');
+  }
+  const directUrl = chosen && chosen.ext !== 'm3u8' && !chosen.isDashM4s && chosen.url ? chosen.url : info.directVideoUrl || '';
+  const out = await startRealDownload({
+    platform: r.platform || 'douyin',
+    title: info.title || 'video',
+    videoId: info.videoId || '',
+    directVideoUrl: directUrl,
+    targetUrl: (r.synthesizedLinks && r.synthesizedLinks.cleanUrl) || r.resolvedUrl || url,
+    formatId: (chosen && chosen.formatId) || '',
+    hasAudio: chosen ? chosen.hasAudio : true,
+    requiresYtDlpMerge: Boolean(info.requiresYtDlpMerge || (chosen && chosen.isDashM4s) || (chosen && chosen.hasAudio === false)),
+    outputFormat,
+    headers: (chosen && chosen.headers) || info.downloadHeaders || {},
+    cookie,
+    metadata: r
+  });
+  return { analysis: r, chosen, job: out.job, alreadyDownloading: Boolean(out.alreadyDownloading) };
+}
+
 module.exports = {
   PLATFORMS,
   analyzeVideo,
   startRealDownload,
+  downloadFromLink,
   cancelDownloadJob,
   removeDownloadItem,
   getDownloadsList,
