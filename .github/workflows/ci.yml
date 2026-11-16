@@ -35,9 +35,10 @@ jobs:
             QwenLocal
           key: ai-${{ runner.os }}-${{ hashFiles('requirements/*.txt', 'src/tool_installer.js', 'src/python_env.js', 'src/qwen_shared_home.js') }}
 
-      # Máy kiểm thử cài TẤT CẢ thành phần (--all) kể cả AI dịch Local Qwen3.5 9B; người dùng thật được hỏi từng mục
+      # Máy kiểm thử cài TẤT CẢ thành phần (--all). Máy CI macOS chỉ có 7 GB RAM, không chạy nổi Qwen 9B
+      # (app cũng khuyến nghị không cài khi RAM < 15 GB) → bỏ Qwen trên macOS; Windows (16 GB) vẫn cài Qwen.
       - name: Cài thành phần AI (Python 3.12, model) như máy mới
-        run: node scripts/setup.js --all
+        run: node scripts/setup.js --all ${{ runner.os == 'macOS' && '--no-llm' || '' }}
 
       - name: Kiểm tra cài đặt
         run: node scripts/setup.js --check
