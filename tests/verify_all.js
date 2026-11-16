@@ -142,6 +142,7 @@ async function runAllTests() {
   const sampleLong = path.join(fixturesDir, 'sample_long.mp4');
   const sampleCorrupt = path.join(fixturesDir, 'sample_corrupt.mp4');
   const sampleWithRealSpeech = path.join(fixturesDir, 'sample_with_speech.mp4');
+  const sampleEnSpeech = path.join(fixturesDir, 'sample_en_speech.mp4');
 
   // 1. Tạo video sine wave
   await generateSyntheticMedia(ffmpegBin, [
@@ -182,6 +183,20 @@ async function runAllTests() {
     '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
     '-c:a', 'aac',
     sampleWithRealSpeech
+  ]);
+
+  // 5. Video có lời nói TIẾNG ANH (giọng hệ điều hành — macOS và Windows đều có) để kiểm thử nhận dạng giọng nói.
+  //    SenseVoice không hỗ trợ tiếng Việt, nên không dùng mẫu tiếng Việt ở trên cho bài ASR.
+  const enVoices = getSupportedVoices('en');
+  const enVoice = enVoices.find((v) => v.installed) || enVoices[0];
+  const enSpeech = await generateVoicePreviewAudio(enVoice.id, 'Hello everyone, welcome to the speech recognition test on this computer.');
+  await generateSyntheticMedia(ffmpegBin, [
+    '-y',
+    '-f', 'lavfi', '-i', 'testsrc=duration=6:size=320x240:rate=15',
+    '-i', enSpeech.audioFilePath,
+    '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
+    '-c:a', 'aac', '-shortest',
+    sampleEnSpeech
   ]);
 
   fs.writeFileSync(sampleCorrupt, Buffer.alloc(1024, 0x42));
@@ -590,8 +605,9 @@ async function runAllTests() {
   );
 
   // D5. KIỂM THỬ ASR THỰC TẾ: Nhận dạng giọng nói trên video có lời thoại tạo các phân đoạn có mốc thời gian startSec / endSec
-  console.log('    ⏳ Đang chạy ASR Faster-Whisper trên video có lời thoại thực tế...');
-  const realSpeechASR = await extractAndPrepareSegments(sampleWithRealSpeech, 'vi', null, { cloudConsent: false });
+  console.log('    ⏳ Đang chạy nhận dạng giọng nói (SenseVoice) trên video có lời thoại tiếng Anh...');
+  // đích 'en' = ngôn ngữ nguồn → không cần bộ dịch (máy CI không cài Qwen vẫn kiểm được ASR)
+  const realSpeechASR = await extractAndPrepareSegments(sampleEnSpeech, 'en', null, { cloudConsent: false, transcriptSource: 'asr' });
   assertTest(
     realSpeechASR.segments.length >= 1 &&
       realSpeechASR.segments.every((s) => typeof s.startSec === 'number' && typeof s.endSec === 'number' && s.endSec > s.startSec && Boolean(s.sourceText)),
