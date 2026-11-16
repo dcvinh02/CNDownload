@@ -877,7 +877,9 @@ async function main() {
     ['老板拿双肉色的丝袜', 0.5, 3.0],
     ['我要肉色的你拿黑的做啥子', 4.0, 6.5],
     ['是帽子噻严丝合缝的', 8.0, 10.5],
-    ['你不就这个色嗦', 12.0, 14.5]
+    ['你不就这个色嗦', 12.0, 14.5],
+    // câu bị "chớp" mất 0,5 s giữa chừng (bị che/nền sáng) → phải ra 1 câu, không lồng tiếng lặp 2 lần
+    ['那这个问题得尽快解决噻', 15.5, 18.5, 'between(t,15.5,16.4)+between(t,16.9,18.5)']
   ];
   const OCR_NOISE = ['抖音号12345', '欢迎光临小卖部', '超市'];
   const ocrDir = path.join(TMP, 'ocr_video');
@@ -912,16 +914,16 @@ async function main() {
         dt('n1.txt', 'fontsize=44:fontcolor=white:x=(w-tw)/2:y=60'),
         logo,
         dt('n2.txt', "fontsize=40:fontcolor=yellow:x=60:y=h*0.62:enable='between(t,5,7)'"),
-        ...OCR_LINES.map(([, a, b], i) => dt(`s${i}.txt`, `fontsize=40:fontcolor=white:borderw=3:bordercolor=black:x=(w-tw)/2:y=h*0.80:enable='between(t,${a},${b})'`))
+        ...OCR_LINES.map(([, a, b, en], i) => dt(`s${i}.txt`, `fontsize=40:fontcolor=white:borderw=3:bordercolor=black:x=(w-tw)/2:y=h*0.80:enable='${en || `between(t,${a},${b})`}'`))
       ];
       // Có track âm thanh (nhạc nền 220 Hz nhỏ, không lời) như video thật
-      const mk = (vf, out) => spawnSync(FFMPEG, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=0x336655:s=1280x720:d=16:r=25', '-f', 'lavfi', '-i', 'sine=frequency=220:sample_rate=16000:duration=16', '-vf', vf, '-af', 'volume=0.05', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', path.basename(out)], { cwd: ocrDir, encoding: 'utf8' });
+      const mk = (vf, out) => spawnSync(FFMPEG, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=0x336655:s=1280x720:d=20:r=25', '-f', 'lavfi', '-i', 'sine=frequency=220:sample_rate=16000:duration=20', '-vf', vf, '-af', 'volume=0.05', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', path.basename(out)], { cwd: ocrDir, encoding: 'utf8' });
       const r1 = mk(filters.join(','), ocrVideo);
       const r2 = mk(logo, ocrPlain);
       if (r1.status !== 0 || r2.status !== 0) console.log(`  (không dựng được video OCR: ${String(r1.stderr || r2.stderr).slice(-300)})`);
     }
   }
-  await check('OCR phụ đề: đọc đúng 4 câu + đúng mốc thời gian; bỏ qua logo góc, biển hiệu trên cùng và chữ ngẫu nhiên bên cạnh', async () => {
+  await check('OCR phụ đề: đọc đúng 5 câu + đúng mốc thời gian (câu bị chớp giữa chừng vẫn là 1 câu); bỏ qua logo góc, biển hiệu trên cùng và chữ ngẫu nhiên bên cạnh', async () => {
     ocrPrereq();
     const r = ocrWorker(ocrVideo, 'extract');
     assert(r.ok, `OCR lỗi: ${r.error}`);

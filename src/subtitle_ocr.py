@@ -47,6 +47,7 @@ class SubtitleOCR:
         x = ((pad / 255.0) - 0.5) / 0.5
         prob = self.det.run(None, {"x": x.transpose(2, 0, 1)[None]})[0][0, 0, :h, :w]
         mask = prob > 0.3
+        weak = prob > 0.1
         rows = mask.sum(axis=1) > 2
         boxes = []
         r = 0
@@ -59,7 +60,7 @@ class SubtitleOCR:
                 r += 1
             r1 = r
             lh = r1 - r0
-            if lh < 8:
+            if lh < 3:
                 continue
             cols = mask[r0:r1].any(axis=0)
             idx = np.where(cols)[0]
@@ -72,12 +73,32 @@ class SubtitleOCR:
             for c in list(idx[1:]) + [None]:
                 if c is None or c - prev > gap:
                     c0, c1 = start, prev + 1
-                    if c1 - c0 >= lh * 1.2:
-                        score = float(prob[r0:r1, c0:c1].mean())
-                        if score >= 0.35:
-                            pad_y = int(lh * 0.35)
-                            pad_x = int(lh * 0.5)
-                            boxes.append((max(0, c0 - pad_x), max(0, r0 - pad_y), min(w, c1 + pad_x), min(h, r1 + pad_y), score))
+                    if lh >= 8:
+                        # dòng bình thường (như trước)
+                        if c1 - c0 >= lh * 1.2:
+                            score = float(prob[r0:r1, c0:c1].mean())
+                            if score >= 0.3:
+                                pad_y = int(lh * 0.35)
+                                pad_x = int(lh * 0.5)
+                                boxes.append((max(0, c0 - pad_x), max(0, r0 - pad_y), min(w, c1 + pad_x), min(h, r1 + pad_y), score))
+                    else:
+                        # Chữ nét mảnh/nhạt: vùng lõi của bộ tìm chữ (DB) chỉ cao vài px → nới theo ngưỡng thấp
+                        # để lấy đủ chiều cao chữ (giới hạn để không dính sang dòng bên cạnh)
+                        g0, g1 = r0, r1
+                        while g0 > 0 and r0 - g0 < 8 and int(weak[g0 - 1, c0:c1].sum()) > 2:
+                            g0 -= 1
+                        while g1 < h and g1 - r1 < 8 and int(weak[g1, c0:c1].sum()) > 2:
+                            g1 += 1
+                        th = max(g1 - g0, lh * 2)
+                        cy = (g0 + g1) // 2
+                        g0, g1 = cy - th // 2, cy + (th + 1) // 2
+                        # dòng 1 chữ (嗯, 嘿, 哼…) gần vuông → chỉ cần rộng ≥ 0,5 lần chiều cao
+                        if th >= 8 and c1 - c0 >= th * 0.5:
+                            score = float(prob[r0:r1, c0:c1].mean())
+                            if score >= 0.3:
+                                pad_y = int(th * 0.3) + 1
+                                pad_x = int(th * 0.5)
+                                boxes.append((max(0, c0 - pad_x), max(0, g0 - pad_y), min(w, c1 + pad_x), min(h, g1 + pad_y), score))
                     if c is not None:
                         start = c
                 if c is not None:
@@ -185,6 +206,15 @@ def read_frame_lines(ocr, img, cache):
     return lines
 
 
+def _core(t):
+    return "".join(ch for ch in t if CJK_RE.match(ch) or ch.isalnum())
+
+
+def _is_subseq(a, b):
+    it = iter(b)
+    return all(ch in it for ch in a)
+
+
 def _similar(a, b):
     if not a or not b:
         return 0.0
@@ -218,10 +248,14 @@ def pick_subtitle_lines(frames, width):
     for t, lines in frames:
         keep = [
             l for l in lines
-            if l[1] >= 0.75 and CJK_RE.search(l[0]) and abs(l[3] - width / 2.0) <= width * 0.28 and abs(l[2] - mode_y) <= max(24, l[4] * 1.6)
+            # đã đúng vị trí phụ đề (giữa, đúng độ cao) → chấp nhận độ tin cậy thấp hơn một chút (chữ trên nền sáng)
+            if l[1] >= 0.6 and CJK_RE.search(l[0]) and abs(l[3] - width / 2.0) <= width * 0.28 and abs(l[2] - mode_y) <= max(24, l[4] * 1.6)
         ]
         keep.sort(key=lambda l: l[2])
         text = "".join(l[0] for l in keep)
+        # dòng chỉ 1 chữ dễ đọc nhầm (嗯 → 咽) → cần độ tin cậy cao
+        if len(CJK_RE.findall(text)) == 1 and max([l[1] for l in keep] or [0]) < 0.85:
+            keep, text = [], ""
         conf = float(np.mean([l[1] for l in keep])) if keep else 0.0
         per_frame.append((t, text, conf))
     return mode_y, per_frame
@@ -243,6 +277,30 @@ def build_events(per_frame, fps, duration):
             cur = {"start": t, "end": t + step, "variants": [(text, conf)]}
     if cur:
         events.append(cur)
+    # cùng 1 câu bị ngắt quãng ngắn (1-2 khung không đọc được do bị che/nền sáng) → gộp lại, tránh lồng tiếng lặp câu
+    # Phụ đề hiện dần từng phần (三界 → 一窥三界, 老…… → 老……大……我……) → cũng là 1 câu: gộp, lấy bản đầy đủ.
+    # Khác với câu ngập ngừng rồi nói cả câu (我……不…… → 我不光自己加…): câu sau dài hơn hẳn → giữ riêng.
+    merged = []
+    for e in events:
+        if merged and e["start"] - merged[-1]["end"] <= 0.6:
+            # so với bản đầy đủ nhất của câu trước (không phải khung cuối, có thể chỉ đọc được 1 phần)
+            a = max((v[0] for v in merged[-1]["variants"]), key=lambda t: len(_core(t)))
+            b = e["variants"][0][0]
+            if _similar(a, b) >= 0.7:
+                merged[-1]["end"] = e["end"]
+                merged[-1]["variants"].extend(e["variants"])
+                continue
+            ca, cb = _core(a), _core(b)
+            prev = merged[-1]
+            short, long_, short_dur = (ca, cb, prev["end"] - prev["start"]) if len(ca) <= len(cb) else (cb, ca, e["end"] - e["start"])
+            # phần hiện dần chỉ thoáng qua (≤ 0,75 s); câu ngập ngừng ("我真的……") hiện đủ lâu để đọc → giữ riêng
+            if short and short_dur <= 0.75 and _is_subseq(short, long_) and len(long_) <= 2 * len(short) + 2:
+                merged[-1]["end"] = e["end"]
+                merged[-1]["variants"].extend(e["variants"])
+                merged[-1]["progressive"] = True
+                continue
+        merged.append(e)
+    events = merged
     out = []
     for e in events:
         # chọn cách đọc xuất hiện nhiều nhất (độ tin cậy cao nhất khi bằng nhau)
@@ -251,7 +309,10 @@ def build_events(per_frame, fps, duration):
             s = score.setdefault(txt, [0, 0.0])
             s[0] += 1
             s[1] = max(s[1], c)
-        text = max(score.items(), key=lambda kv: (kv[1][0], kv[1][1]))[0]
+        if e.get("progressive"):
+            text = max(score.items(), key=lambda kv: (len(_core(kv[0])), kv[1][0], kv[1][1]))[0]
+        else:
+            text = max(score.items(), key=lambda kv: (kv[1][0], kv[1][1]))[0]
         out.append({"startSec": round(e["start"], 2), "endSec": round(min(duration or e["end"], e["end"]), 2), "sourceText": text})
     # bỏ dòng nháy qua và dòng đứng yên quá lâu (logo, watermark, tiêu đề cố định)
     total = {}
