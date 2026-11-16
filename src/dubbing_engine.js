@@ -2134,8 +2134,11 @@ async function extractAndPrepareSegments(videoPathOrOpts, targetLang = 'vi', cus
       usedCloudTranslation = tr.usedCloud;
       translationStats = tr.stats;
     }
-    const empty = segments.find((s) => !String(s.translatedText || '').trim());
-    if (empty) throw new Error(`Phân đoạn số ${empty.index} chưa có lời dịch để đọc.`);
+    // Câu AI vẫn không dịch được sau khi đã tự dịch lại → BỎ QUA câu đó (không lồng tiếng), không làm hỏng cả video
+    const empties = segments.filter((s) => !String(s.translatedText || '').trim());
+    if (empties.length > 0 && typeof options.onLog === 'function') {
+      options.onLog('warn', `${empties.length} phân đoạn vẫn chưa dịch được sau khi tự dịch lại (số ${empties.map((s) => s.index).slice(0, 15).join(', ')}) — bỏ qua, không lồng tiếng các câu này.`);
+    }
 
     return {
       totalDuration: Number(mediaInfo.duration.toFixed(2)),
@@ -2633,7 +2636,19 @@ function startDubbingJob({
       jobState.translationStats = prepared.translationStats || null;
       const segments = prepared.segments.filter((s) => String(s.translatedText || '').trim());
       if (segments.length === 0) throw new Error('Không có phân đoạn nào có lời dịch để tạo giọng đọc.');
-      const ttsCheck = validateSegmentsForTts(segments, { targetLang, totalDuration: prepared.totalDuration });
+      if (segments.length < prepared.segments.length) {
+        jlog('warn', `Bỏ qua ${prepared.segments.length - segments.length} câu chưa có lời dịch; lồng tiếng ${segments.length} câu còn lại.`);
+      }
+      let ttsCheck = validateSegmentsForTts(segments, { targetLang, totalDuration: prepared.totalDuration });
+      // Lỗi chỉ ở vài câu (còn chữ Hán, chữ thừa, mốc thời gian hỏng) → bỏ riêng các câu đó, vẫn lồng tiếng phần còn lại
+      if (!ttsCheck.ok && ttsCheck.badIndexes.length > 0 && ttsCheck.badIndexes.length < segments.length) {
+        const bad = new Set(ttsCheck.badIndexes);
+        const dropped = segments.filter((s, i) => bad.has(i));
+        jlog('warn', `Bỏ qua ${dropped.length} câu có lời dịch lỗi (số ${dropped.map((s) => s.index).slice(0, 15).join(', ')}): ${ttsCheck.errors.slice(0, 3).join(' ')}`);
+        jobState.warnings.push(`${dropped.length} câu có lời dịch lỗi nên không được lồng tiếng (số ${dropped.map((s) => s.index).slice(0, 15).join(', ')}).`);
+        for (let i = segments.length - 1; i >= 0; i--) if (bad.has(i)) segments.splice(i, 1);
+        ttsCheck = validateSegmentsForTts(segments, { targetLang, totalDuration: prepared.totalDuration });
+      }
       if (!ttsCheck.ok) {
         throw new Error(`Dữ liệu dịch chưa hợp lệ để tạo giọng đọc: ${ttsCheck.errors.slice(0, 5).join(' ')}${ttsCheck.errors.length > 5 ? ` (+${ttsCheck.errors.length - 5} lỗi)` : ''}`);
       }
@@ -3173,11 +3188,13 @@ function cancelExtractTask(taskId) {
 function validateSegmentsForTts(segments, { targetLang = 'vi', totalDuration = 0 } = {}) {
   const errors = [];
   const warnings = [];
+  const badIndexes = [];
   const list = Array.isArray(segments) ? segments : [];
   const ids = new Set();
   let prevStart = -1;
   list.forEach((s, i) => {
     const label = `Đoạn ${s.index || i + 1}`;
+    const nErr = errors.length;
     if (s.id === undefined || s.id === null) errors.push(`${label}: thiếu ID.`);
     else if (ids.has(String(s.id))) errors.push(`${label}: ID ${s.id} bị trùng.`);
     ids.add(String(s.id));
@@ -3196,8 +3213,9 @@ function validateSegmentsForTts(segments, { targetLang = 'vi', totalDuration = 0
     if (/^(bản dịch|dịch|translation)\s*[:：]/i.test(tr) || /\((ghi chú|chú thích|note)[^)]*\)/i.test(tr)) {
       errors.push(`${label}: lời dịch có chữ thừa ngoài nội dung cần đọc: "${tr.slice(0, 40)}".`);
     }
+    if (errors.length > nErr) badIndexes.push(i);
   });
-  return { ok: errors.length === 0, errors, warnings, checked: list.length };
+  return { ok: errors.length === 0, errors, warnings, badIndexes, checked: list.length };
 }
 
 function serializeDubbingJob(job) {

@@ -279,7 +279,10 @@ async function translateChunk(chunk, ctxBefore, ctxAfter, opts, stats, depth = 0
   let user = baseUser;
   let lastProblems = [];
 
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  // Câu đơn lẻ (đã chia nhỏ tới mức 1 câu) được thêm 1 lần thử với độ sáng tạo cao hơn — model hay "kẹt" lặp lại
+  // đúng một lỗi (vd. giữ nguyên "放宽") khi nhiệt độ thấp
+  const maxAttempts = chunk.length === 1 ? 3 : 2;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     if (signal && signal.aborted) throw new AiProviderError('CANCELLED', 'Tác vụ dịch đã bị hủy.');
     const res = await generateText({
       featureId: 'translation',
@@ -288,7 +291,7 @@ async function translateChunk(chunk, ctxBefore, ctxAfter, opts, stats, depth = 0
       system: DUBBING_TRANSLATION_PROMPT,
       user,
       jsonSchema: { gemini: RESPONSE_SCHEMA_GEMINI },
-      temperature: 0.3,
+      temperature: attempt >= 3 ? 0.8 : 0.3,
       signal,
       allowCloud: opts.allowCloud !== false
     });
