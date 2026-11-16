@@ -847,7 +847,7 @@ def cmd_transcribe_and_translate(args):
             vad_filter=True,
             vad_parameters=dict(min_silence_duration_ms=350, speech_pad_ms=200),
             condition_on_previous_text=False,
-            **({"language": "zh"} if input_lang == "zh" else {}),
+            **({"language": "zh"} if input_lang in ("zh", "zh_d") else {}),
         )
     detected_lang0 = (getattr(info, "language", "") or "").lower()
     if not english_mode and input_lang == "auto" and detected_lang0.startswith("en"):
@@ -858,12 +858,18 @@ def cmd_transcribe_and_translate(args):
         english_mode = True
     # Whisper hay trộn chữ phồn thể/giản thể với tiếng Phổ thông. Ngôn ngữ đã được nhận diện trước khi giải mã
     # (generator chưa chạy), nên với "zh" ta tạo lại generator kèm gợi ý giản thể — không tốn thêm lượt nhận dạng.
-    if not english_mode and (input_lang == "zh" or detected_lang0.startswith("zh")):
+    zh_prompt = "以下是普通话的句子，使用简体中文，带标点符号。"
+    if input_lang == "zh_d":
+        # Chỉ khi người dùng chọn "Tiếng Trung — phương ngữ": gợi ý từ vựng phương ngữ + tên video (đo trên video
+        # tiếng Tứ Xuyên có nhạc nền: 55% → 64% chữ đúng). Không áp cho tiếng phổ thông.
+        title = (getattr(args, "context_title", "") or "").strip()[:80]
+        zh_prompt = (title + "。" if title else "") + "以下是方言（四川话等）的对话，使用简体中文书写，带标点符号。常用词：做啥子、晓得、没得、啥子、嘞、噻、嗦、脑壳、老子、巴适、要得、咋个、莫得。"
+    if not english_mode and (input_lang in ("zh", "zh_d") or detected_lang0.startswith("zh")):
         segments_gen, info = model.transcribe(
             audio_path,
             beam_size=4,
             language="zh",
-            initial_prompt="以下是普通话的句子，使用简体中文，带标点符号。",
+            initial_prompt=zh_prompt,
             hotwords="简体中文",
             word_timestamps=True,
             vad_filter=True,
@@ -903,7 +909,7 @@ def cmd_transcribe_and_translate(args):
             vad_filter=False,
             no_speech_threshold=0.65,
             condition_on_previous_text=False,
-            **({"language": "en"} if english_mode else {"language": "zh"} if input_lang == "zh" else {}),
+            **({"language": "en"} if english_mode else {"language": "zh"} if input_lang in ("zh", "zh_d") else {}),
         )
         info = info2
         for s in segments_gen2:
@@ -1053,6 +1059,22 @@ def cmd_transcribe_and_translate(args):
     return result
 
 
+def cmd_ocr_subtitles(args):
+    """Đọc phụ đề cứng tiếng Trung trong hình video (PP-OCRv4 ONNX, chỉ vùng phụ đề)."""
+    import subtitle_ocr as so
+
+    ocr = so.SubtitleOCR(args.models)
+    if args.mode == "probe":
+        return so.probe(ocr, args.ffmpeg, args.video, samples=int(args.samples or 24))
+    return so.extract(
+        ocr,
+        args.ffmpeg,
+        args.video,
+        fps=float(args.fps or 4),
+        on_progress=lambda t, d: emit_progress({"stage": "ocr", "pos": round(t, 2), "total": round(d, 2)}),
+    )
+
+
 def cmd_translate_batch(args):
     payload = load_payload(args)
     texts = payload.get("texts") or []
@@ -1132,7 +1154,8 @@ def cmd_separate_background(args):
             x = np.frombuffer(raw, dtype=np.int16).astype(np.float32).reshape(-1, 2).T / 32768.0
             res = sep.process(sample_rate=sr, samples=np.ascontiguousarray(x))
             stems = list(res.stems)  # [vocals, accompaniment]
-            stem = np.asarray(stems[1].data, dtype=np.float32) if len(stems) > 1 else np.asarray(stems[0].data, dtype=np.float32)
+            want = 0 if str(getattr(args, "stem", "accompaniment")) == "vocals" else 1
+            stem = np.asarray(stems[want].data, dtype=np.float32) if len(stems) > want else np.asarray(stems[0].data, dtype=np.float32)
             if stem.ndim == 1:
                 stem = np.vstack([stem, stem])
             stem = stem[:, : x.shape[1]]
@@ -1335,6 +1358,7 @@ def main():
     p_asr.add_argument("--cloud-base-url", default="")
     p_asr.add_argument("--skip-translation", default="0")
     p_asr.add_argument("--input-lang", default="auto")
+    p_asr.add_argument("--context-title", default="")
     p_asr.add_argument("--diarize", default="0")
     p_asr.add_argument("--diar-dir", default="")
     p_asr.add_argument("--num-speakers", default="-1")
@@ -1356,10 +1380,19 @@ def main():
     p_tts.add_argument("--text", required=True)
     p_tts.add_argument("--output", required=True)
 
+    p_ocr = sub.add_parser("ocr_subtitles")
+    p_ocr.add_argument("--video", required=True)
+    p_ocr.add_argument("--models", required=True)
+    p_ocr.add_argument("--ffmpeg", required=True)
+    p_ocr.add_argument("--mode", default="extract")
+    p_ocr.add_argument("--fps", default="4")
+    p_ocr.add_argument("--samples", default="24")
+
     p_sep = sub.add_parser("separate_background")
     p_sep.add_argument("--input", required=True)
     p_sep.add_argument("--output", required=True)
     p_sep.add_argument("--model-dir", required=True)
+    p_sep.add_argument("--stem", default="accompaniment")
 
     p_ttsb = sub.add_parser("tts_batch")
     p_ttsb.add_argument("--payload-json", default="")
@@ -1377,6 +1410,8 @@ def main():
             res = cmd_tts_batch(args)
         elif args.cmd == "separate_background":
             res = cmd_separate_background(args)
+        elif args.cmd == "ocr_subtitles":
+            res = cmd_ocr_subtitles(args)
         else:
             res = {"ok": False, "error": f"Lệnh không hợp lệ: {args.cmd}"}
     except Exception as exc:

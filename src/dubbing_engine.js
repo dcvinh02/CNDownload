@@ -40,6 +40,34 @@ const DIARIZATION_DIR = path.join(MODELS_ROOT, 'diarization');
 
 const SEPARATION_MODEL_DIR = path.join(MODELS_ROOT, 'separation', 'sherpa-onnx-spleeter-2stems-fp16');
 
+const OCR_MODELS_DIR = path.join(MODELS_ROOT, 'ocr');
+function isOcrModelsReady() {
+  return ['ch_PP-OCRv4_det_infer.onnx', 'ch_PP-OCRv4_rec_infer.onnx'].every((f) => {
+    try {
+      return fs.statSync(path.join(OCR_MODELS_DIR, f)).size > 1e6;
+    } catch (_) {
+      return false;
+    }
+  });
+}
+
+/** Tên video (từ file .metadata.json lúc tải, hoặc tên file) — làm ngữ cảnh cho Whisper ở chế độ phương ngữ. */
+function videoContextTitle(videoPath) {
+  try {
+    const meta = JSON.parse(fs.readFileSync(String(videoPath).replace(/\.[^.\\/]+$/, '.metadata.json'), 'utf8'));
+    const t = (meta.data && meta.data.title) || meta.title;
+    if (t) return String(t).replace(/#\S+/g, '').trim().slice(0, 80);
+  } catch (_) {}
+  return path
+    .basename(String(videoPath))
+    .replace(/\.[^.]+$/, '')
+    .replace(/^[a-z]+_[0-9A-Za-z=]{6,}_/, '')
+    .replace(/_\d{5}$/, '')
+    .replace(/#\S+/g, '')
+    .trim()
+    .slice(0, 80);
+}
+
 function isSeparationAvailable() {
   return (
     fs.existsSync(path.join(SEPARATION_MODEL_DIR, 'vocals.fp16.onnx')) &&
@@ -669,6 +697,8 @@ function loadPersistedJobs() {
   try {
     const arr = JSON.parse(fs.readFileSync(JOB_STATE_FILE, 'utf8'));
     for (const j of Array.isArray(arr) ? arr : []) {
+      // Tác vụ dở dang mà video gốc không còn (đã xóa / thư mục tạm) thì không chạy tiếp được → bỏ khỏi danh sách
+      if (['running', 'interrupted', 'error', 'cancelled'].includes(j.status) && j.videoPath && !fs.existsSync(j.videoPath)) continue;
       if (j.status === 'running') {
         j.status = 'interrupted';
         j.error = 'Ứng dụng bị tắt hoặc gián đoạn khi tác vụ đang chạy. Bấm "Chạy tiếp" để làm lại — phần dịch AI đã hoàn tất được dùng lại từ bộ nhớ đệm.';
@@ -2147,12 +2177,66 @@ async function extractAndPrepareSegments(videoPathOrOpts, targetLang = 'vi', cus
   const extractedWavPath = path.join(workDir, 'extracted_audio_16k.wav');
   const wantDiarize = options.autoDiarize === true && isDiarizationAvailable();
   // Ngôn ngữ đầu vào: auto (tự nhận diện) | zh (tiếng Trung) | en (tiếng Anh — module riêng)
-  const inputLang = ['zh', 'en'].includes(String(options.inputLang || '').toLowerCase()) ? String(options.inputLang).toLowerCase() : 'auto';
+  const inputLang = ['zh', 'zh_d', 'en'].includes(String(options.inputLang || '').toLowerCase()) ? String(options.inputLang).toLowerCase() : 'auto';
   if (options.autoDiarize === true && !wantDiarize) log('warn', 'Đã bật nhận diện người nói nhưng máy chưa cài mô hình phân tách người nói — bỏ qua bước này.');
 
   try {
     let asr = ckpt && ckpt.asr ? ckpt.asr : null;
-    if (asr) {
+    // Nguồn lời thoại: 'auto' (có phụ đề chữ Trung in sẵn → OCR, không có → nghe) | 'ocr' | 'asr'
+    const transcriptSource = ['ocr', 'asr'].includes(String(options.transcriptSource || '')) ? String(options.transcriptSource) : 'auto';
+    if (!asr && transcriptSource !== 'asr' && inputLang !== 'en') {
+      const ocrReady = isOcrModelsReady();
+      if (transcriptSource === 'ocr' && !ocrReady) {
+        throw new Error('Chưa cài "Đọc phụ đề trong hình (OCR)". Mở 🧩 Thành phần để cài (~16 MB) hoặc chọn nguồn "Nghe giọng nói".');
+      }
+      let useOcr = transcriptSource === 'ocr';
+      if (!useOcr && ocrReady) {
+        onStepChange(2, 'Đang kiểm tra video có phụ đề chữ Trung in sẵn không (OCR nhanh 24 khung hình)...');
+        const pr = await runLocalAiWorker(['ocr_subtitles', '--video', videoPath, '--models', OCR_MODELS_DIR, '--ffmpeg', getFfmpegBin(), '--mode', 'probe', '--samples', '24'], trackProc, 180000);
+        if (pr && pr.ok) {
+          useOcr = Boolean(pr.hasSubtitles);
+          log(useOcr ? 'ok' : 'info', `Kiểm tra phụ đề trong hình: ${Math.round((pr.ratio || 0) * 100)}% khung có chữ Trung ở vùng phụ đề, ${pr.distinct || 0} câu khác nhau → ${useOcr ? 'DÙNG OCR (đọc phụ đề)' : 'không có phụ đề → nghe giọng nói'}.`);
+        } else {
+          log('warn', `Không kiểm tra được phụ đề trong hình (${(pr && pr.error) || 'lỗi'}) → nghe giọng nói.`);
+        }
+      }
+      if (useOcr) {
+        onStepChange(2, 'Bước 2/5: Đang đọc phụ đề chữ Trung trong hình (OCR PP-OCRv4)...');
+        log('info', 'Bước 2: đọc phụ đề trong hình bằng OCR (chỉ vùng phụ đề, bỏ chữ đứng yên/logo).');
+        const ocrRes = await runLocalAiWorker(
+          ['ocr_subtitles', '--video', videoPath, '--models', OCR_MODELS_DIR, '--ffmpeg', getFfmpegBin(), '--mode', 'extract', '--fps', '4'],
+          trackProc,
+          Math.max(300000, Math.round(mediaInfo.duration * 2000) + 120000),
+          null,
+          (p) => {
+            if (p && p.stage === 'ocr' && p.total > 0) onSubProgress(2, p.pos, p.total);
+          }
+        );
+        const ocrSegs = ocrRes && ocrRes.ok ? sanitizeSegments(ocrRes.segments).map((x) => ({ ...x, translatedText: '' })) : [];
+        if (ocrSegs.length >= 3) {
+          asr = {
+            detectedSourceLang: 'zh',
+            languageProbability: 1,
+            sourceLangName: LANGUAGE_INFO.zh.name,
+            asrModelUsed: 'OCR phụ đề trong hình (PaddleOCR PP-OCRv4)',
+            speakerCount: 1,
+            diarization: { ok: false, skipped: true },
+            transcriptSource: 'ocr',
+            segments: ocrSegs
+          };
+          if (ckpt) ckpt.asr = asr;
+          log('ok', `Bước 2: OCR đọc được ${ocrSegs.length} câu phụ đề (${ocrRes.framesRead} khung hình).`);
+        } else if (transcriptSource === 'ocr') {
+          throw new Error((ocrRes && ocrRes.error) || 'OCR không đọc được phụ đề chữ Trung trong video này. Hãy chọn nguồn "Nghe giọng nói".');
+        } else {
+          log('warn', `OCR chỉ đọc được ${ocrSegs.length} câu → chuyển sang nghe giọng nói.`);
+        }
+      }
+    }
+    if (asr && asr.transcriptSource === 'ocr' && !(ckpt && ckpt.asrReused)) {
+      // vừa đọc OCR xong ở trên → bỏ qua tách âm thanh & ASR
+      if (ckpt) ckpt.asrReused = true;
+    } else if (asr) {
       onStepChange(2, `Dùng lại kết quả nhận dạng giọng nói đã có (${asr.segments.length} đoạn) — bỏ qua tách âm thanh & ASR.`);
       log('info', `Bỏ qua Bước 1–2: dùng lại kết quả ASR đã lưu (${asr.segments.length} đoạn, ${String(asr.detectedSourceLang || '').toUpperCase()}).`);
     } else {
@@ -2195,7 +2279,9 @@ async function extractAndPrepareSegments(videoPathOrOpts, targetLang = 'vi', cus
         '--skip-translation',
         translateInNode ? '1' : '0',
         '--input-lang',
-        inputLang
+        inputLang,
+        '--context-title',
+        inputLang === 'zh_d' ? videoContextTitle(videoPath) : ''
       ];
       // Nhận diện người nói: CHỈ chạy khi người dùng bật (mặc định tắt)
       if (wantDiarize) {
@@ -2203,7 +2289,7 @@ async function extractAndPrepareSegments(videoPathOrOpts, targetLang = 'vi', cus
         workerArgs.push('--diarize', '1', '--diar-dir', DIARIZATION_DIR, '--num-speakers', String(n > 0 ? n : -1));
         onStepChange(2, 'Bước 2/5: Đang nhận dạng giọng nói (ASR) và phân tách người nói...');
       }
-      log('info', `Bước 2: nhận dạng giọng nói bằng ${path.basename(asrModelDir)} • ngôn ngữ đầu vào: ${{ auto: 'Tự động', zh: 'Tiếng Trung', en: 'Tiếng Anh' }[inputLang]}${wantDiarize ? ' + phân tách người nói' : ' (không nhận diện người nói)'}...`);
+      log('info', `Bước 2: nhận dạng giọng nói bằng ${path.basename(asrModelDir)} • ngôn ngữ đầu vào: ${{ auto: 'Tự động', zh: 'Tiếng Trung', zh_d: 'Tiếng Trung — phương ngữ', en: 'Tiếng Anh' }[inputLang]}${wantDiarize ? ' + phân tách người nói' : ' (không nhận diện người nói)'}...`);
 
       // Timeout theo độ dài âm thanh (CPU int8 ~ 0.3–1.5x thời gian thực tùy model)
       const asrTimeout = Math.max(240000, Math.round(mediaInfo.duration * 3000) + 120000);
@@ -2376,7 +2462,8 @@ function startDubbingJob({
   numSpeakers = 0,
   removeOriginalVoice = true,
   source = 'download',
-  inputLang = 'auto'
+  inputLang = 'auto',
+  transcriptSource = 'auto'
 }) {
   if (!videoPath || !fs.existsSync(videoPath)) {
     throw new Error('Không tìm thấy file video gốc để lồng tiếng.');
@@ -2465,7 +2552,8 @@ function startDubbingJob({
     videoPath, outputDir, targetLang, voiceId, speakerVoices, originalVolume, dubVolume, autoDucking, duckLevel, maxTempo,
     customSegments, sourceLang, exportSrt, cloudConsent, translationProvider, translationStyle, aiModel, autoDiarize, numSpeakers, removeOriginalVoice,
     source: jobSource,
-    inputLang
+    inputLang,
+    transcriptSource
   };
   const jlog = (level, msg) => {
     jobState.logs.push({ at: new Date().toISOString(), level, step: jobState.stepIndex, source: jobSource, msg: redactSecrets(String(msg)).slice(0, 500) });
@@ -2515,6 +2603,7 @@ function startDubbingJob({
         autoDiarize,
         numSpeakers,
         inputLang,
+        transcriptSource,
         trackProc,
         signal: abortCtrl.signal,
         onLog: (lv, m) => jlog(lv, m),
@@ -2864,6 +2953,7 @@ function runExtractTask(task, params) {
         autoDiarize: params.autoDiarize === true,
         numSpeakers: params.numSpeakers,
         inputLang: params.inputLang,
+        transcriptSource: params.transcriptSource,
         checkpoint: task.checkpoint,
         onLog: log,
         trackProc,
@@ -2975,7 +3065,8 @@ function startExtractTask(params = {}) {
     aiModel: params.aiModel,
     autoDiarize: params.autoDiarize === true,
     numSpeakers: params.numSpeakers,
-    inputLang: ['zh', 'en'].includes(params.inputLang) ? params.inputLang : 'auto'
+    inputLang: ['zh', 'zh_d', 'en'].includes(params.inputLang) ? params.inputLang : 'auto',
+    transcriptSource: ['ocr', 'asr'].includes(params.transcriptSource) ? params.transcriptSource : 'auto'
   };
   if (!task.params.autoDiarize) {
     const dz = task.stages.find((x) => x.code === 'diarize');
@@ -2987,7 +3078,7 @@ function startExtractTask(params = {}) {
   stale.slice(0, Math.max(0, stale.length - 5)).forEach(cleanupExtractCheckpoint);
   const p = task.params;
   runExtractTask(task, p);
-  task.log('info', `Bắt đầu • nguồn: ${source} • video: ${task.inputFileName} • dịch sang ${String(p.targetLang).toUpperCase()} • bộ dịch: ${p.translationProvider || 'auto'}${p.aiModel ? ` (${p.aiModel})` : ''} • ngôn ngữ đầu vào: ${{ auto: 'Tự động', zh: 'Tiếng Trung', en: 'Tiếng Anh' }[p.inputLang]} • nhận diện người nói: ${p.autoDiarize ? 'BẬT' : 'tắt'}.`);
+  task.log('info', `Bắt đầu • nguồn: ${source} • video: ${task.inputFileName} • dịch sang ${String(p.targetLang).toUpperCase()} • bộ dịch: ${p.translationProvider || 'auto'}${p.aiModel ? ` (${p.aiModel})` : ''} • ngôn ngữ đầu vào: ${{ auto: 'Tự động', zh: 'Tiếng Trung', zh_d: 'Tiếng Trung — phương ngữ', en: 'Tiếng Anh' }[p.inputLang]} • nguồn lời thoại: ${{ auto: 'Tự động (phụ đề → OCR)', ocr: 'OCR phụ đề', asr: 'Nghe giọng nói' }[p.transcriptSource]} • nhận diện người nói: ${p.autoDiarize ? 'BẬT' : 'tắt'}.`);
   return serializeExtractTask(task);
 }
 
@@ -3006,11 +3097,11 @@ function resumeExtractTask(taskId, overrides = {}) {
     task.cleanupTimer = null;
   }
   const p = { ...task.params };
-  for (const k of ['cloudConsent', 'translationProvider', 'translationStyle', 'aiModel', 'targetLang', 'inputLang']) {
+  for (const k of ['cloudConsent', 'translationProvider', 'translationStyle', 'aiModel', 'targetLang', 'inputLang', 'transcriptSource']) {
     if (overrides[k] !== undefined && overrides[k] !== null && overrides[k] !== '') p[k] = k === 'cloudConsent' ? Boolean(overrides[k]) : overrides[k];
   }
-  const changed = ['translationProvider', 'aiModel', 'translationStyle', 'targetLang', 'inputLang'].filter((k) => String(p[k] || '') !== String(task.params[k] || ''));
-  if ((p.inputLang || 'auto') !== (task.params.inputLang || 'auto')) {
+  const changed = ['translationProvider', 'aiModel', 'translationStyle', 'targetLang', 'inputLang', 'transcriptSource'].filter((k) => String(p[k] || '') !== String(task.params[k] || ''));
+  if ((p.inputLang || 'auto') !== (task.params.inputLang || 'auto') || (p.transcriptSource || 'auto') !== (task.params.transcriptSource || 'auto')) {
     task.checkpoint.asr = null; // đổi ngôn ngữ đầu vào → phải nhận dạng lại (vẫn dùng lại âm thanh đã tách)
     task.checkpoint.translated = null;
     task.stages.forEach((s) => {
@@ -3161,10 +3252,10 @@ function getAllDubbingJobs() {
     if (overview?.rootDir) {
       candDirs.push(overview.rootDir, path.join(overview.rootDir, 'Dubbed'));
     }
-    for (const d of overview?.platformDirs || []) {
-      if (d?.path) {
-        candDirs.push(d.path, path.join(d.path, 'Dubbed'));
-      }
+    // Thư mục riêng từng nền tảng (downloads/Douyin, downloads/Bilibili... hoặc thư mục tùy chỉnh) + Dubbed/ bên trong
+    for (const d of Object.values(overview?.platforms || {})) {
+      const dir = d && (d.effectiveDir || d.customDir || d.defaultDir);
+      if (dir) candDirs.push(dir, path.join(dir, 'Dubbed'));
     }
 
     const uniqueDirs = Array.from(new Set(candDirs.map((d) => path.resolve(d))));

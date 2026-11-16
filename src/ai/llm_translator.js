@@ -189,6 +189,14 @@ function inspectTranslation(raw, sourceText, targetLang) {
   return { text: t, problem: null };
 }
 
+/**
+ * Lỗi cấu trúc (thiếu mảng, sai số lượng/ID/thứ tự, JSON hỏng, bị cắt) — khác lỗi chất lượng của từng câu.
+ * Lưu ý: mọi thông báo lỗi câu đều có tiền tố "Phân đoạn id=…" nên KHÔNG được dò chữ "id" chung chung.
+ */
+function isStructuralProblem(problems) {
+  return /Thiếu mảng|Số lượng phân đoạn|vị trí \d+ phải có id|JSON|bị cắt/i.test((problems || []).join(' '));
+}
+
 function validateChunkResult(parsed, chunk, targetLang = 'vi') {
   const problems = [];
   const arr = Array.isArray(parsed) ? parsed : parsed && Array.isArray(parsed.segments) ? parsed.segments : null;
@@ -320,7 +328,13 @@ async function translateChunk(chunk, ctxBefore, ctxAfter, opts, stats, depth = 0
       return texts;
     }
     stats.retries += 1;
-    user = `LẦN TRƯỚC KẾT QUẢ SAI CẤU TRÚC: ${v.problems.slice(0, 6).join(' ')} Hãy trả lại đủ ${chunk.length} phân đoạn, đúng ID và thứ tự.\n\n${baseUser}`;
+    if (isStructuralProblem(v.problems)) {
+      user = `LẦN TRƯỚC KẾT QUẢ SAI CẤU TRÚC: ${v.problems.slice(0, 6).join(' ')} Hãy trả lại đủ ${chunk.length} phân đoạn, đúng ID và thứ tự.\n\n${baseUser}`;
+    } else {
+      // Lỗi chất lượng (vd. còn sót chữ Hán): chỉ rõ phần chưa dịch để model sửa đúng chỗ
+      const leftover = Array.from(new Set(v.problems.join(' ').match(/[\u3400-\u9fff]+/g) || [])).slice(0, 8);
+      user = `LẦN TRƯỚC BẢN DỊCH CHƯA ĐẠT: ${v.problems.slice(0, 6).join(' ')}${leftover.length ? ` Phải dịch nghĩa cả các từ: ${leftover.join(', ')}.` : ''} Viết lại "translated_text" hoàn toàn bằng ${targetLang === 'vi' ? 'tiếng Việt, không còn chữ Hán' : 'ngôn ngữ đích'}.\n\n${baseUser}`;
+    }
   }
 
   // Vẫn sai: chia đôi lô để giảm độ khó cho model
@@ -334,7 +348,7 @@ async function translateChunk(chunk, ctxBefore, ctxAfter, opts, stats, depth = 0
   }
   // Chỉ còn 1 câu mà model vẫn dịch lỗi chất lượng → để trống câu đó (báo cảnh báo để người dùng tự nhập),
   // KHÔNG làm hỏng cả tác vụ hàng chục câu
-  if (chunk.length === 1 && lastProblems.length && !/thiếu|số lượng|ID|thứ tự|JSON/i.test(lastProblems.join(' '))) {
+  if (chunk.length === 1 && lastProblems.length && !isStructuralProblem(lastProblems)) {
     stats.problems.push(`Đoạn id=${chunk[0].id} chưa dịch được (${lastProblems.join(' ').slice(0, 160)}) — hãy nhập lời dịch.`);
     return [''];
   }
@@ -431,5 +445,5 @@ module.exports = {
   DUBBING_TRANSLATION_PROMPT,
   translateSegmentsWithLLM,
   PROMPT_VERSION,
-  _internals: { validateChunkResult, inspectTranslation, buildUserPayload, countSpeechUnits, CACHE_DIR }
+  _internals: { validateChunkResult, inspectTranslation, isStructuralProblem, buildUserPayload, countSpeechUnits, CACHE_DIR }
 };

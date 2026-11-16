@@ -265,6 +265,23 @@ function resolveOfficialToolSource(toolId, platform = process.platform, arch = p
         'Tải gói tại URL trên và giải nén vào bin/models/separation/.'
       ]
     },
+    subtitleOcr: {
+      id: 'subtitleOcr',
+      name: 'Đọc phụ đề trong hình (OCR • PaddleOCR PP-OCRv4)',
+      category: 'Mô hình AI Local (OCR)',
+      officialProvider: `PyPI (rapidocr_onnxruntime ${OCR_PACKAGE.version} — mô hình PaddleOCR PP-OCRv4 ONNX)`,
+      license: 'Apache-2.0 (PaddleOCR / RapidOCR)',
+      downloadUrl: OCR_PACKAGE.url,
+      targetPath: path.join(OCR_MODELS_DIR, 'ch_PP-OCRv4_rec_infer.onnx'),
+      archiveType: 'ocr_models',
+      minBytes: 0,
+      estimatedSizeMB: 16,
+      description:
+        'Đọc lời thoại từ phụ đề chữ Trung in sẵn trong video (chính xác hơn nhiều so với nghe khi có tiếng địa phương / nhạc nền). Chỉ giữ 2 file mô hình (~15,6 MB), không cài OpenCV.',
+      remediationSteps: [
+        `Tải ${OCR_PACKAGE.url} (SHA-256 ${OCR_PACKAGE.sha256}), đổi đuôi .zip, giải nén rồi chép rapidocr_onnxruntime/models/ch_PP-OCRv4_det_infer.onnx và ch_PP-OCRv4_rec_infer.onnx vào bin/models/ocr/.`
+      ]
+    },
     speakerDiarization: {
       id: 'speakerDiarization',
       name: 'Phân tách người nói (Pyannote Segmentation 3.0 + 3D-Speaker)',
@@ -324,6 +341,75 @@ function resolveOfficialToolSource(toolId, platform = process.platform, arch = p
   };
 
   return definitions[toolId] || null;
+}
+
+/* ---------- OCR phụ đề (PP-OCRv4 ONNX từ gói RapidOCR trên PyPI) ---------- */
+const OCR_PACKAGE = {
+  version: '1.4.4',
+  url: 'https://files.pythonhosted.org/packages/ba/12/1e5497183bdbe782dbb91bad1d0d2297dba4d2831b2652657f7517bfc6df/rapidocr_onnxruntime-1.4.4-py3-none-any.whl',
+  sha256: '971d7d5f223a7a808662229df1ef69893809d8457d834e6373d3854bc1782cbf',
+  files: [
+    ['rapidocr_onnxruntime/models/ch_PP-OCRv4_det_infer.onnx', 'ch_PP-OCRv4_det_infer.onnx', 4745517],
+    ['rapidocr_onnxruntime/models/ch_PP-OCRv4_rec_infer.onnx', 'ch_PP-OCRv4_rec_infer.onnx', 10857958]
+  ]
+};
+const OCR_MODELS_DIR = path.join(MODELS_DIR, 'ocr');
+
+function isOcrInstalled() {
+  return OCR_PACKAGE.files.every(([, dst, size]) => {
+    try {
+      return fs.statSync(path.join(OCR_MODELS_DIR, dst)).size === size;
+    } catch (_) {
+      return false;
+    }
+  });
+}
+
+async function installOcrModels(job) {
+  fs.mkdirSync(OCR_MODELS_DIR, { recursive: true });
+  const pkg = path.join(OCR_MODELS_DIR, 'rapidocr.whl.part');
+  job.progress = 15;
+  job.step = `Đang tải gói RapidOCR ${OCR_PACKAGE.version} từ PyPI (~15 MB)...`;
+  await downloadFileWithProgress(OCR_PACKAGE.url, pkg, (dl, total) => {
+    if (total > 0) job.progress = 15 + Math.round((dl / total) * 55);
+  });
+  const sha = await computeFileSha256(pkg);
+  if (sha !== OCR_PACKAGE.sha256) {
+    fs.rmSync(pkg, { force: true });
+    throw new Error(`Mã SHA-256 của gói RapidOCR không khớp (nhận ${sha.slice(0, 16)}…) — đã hủy, không giải nén.`);
+  }
+  job.progress = 75;
+  job.step = 'Đang lấy 2 file mô hình PP-OCRv4 (~15,6 MB)...';
+  // Giải nén trong cùng thư mục (cùng ổ đĩa) bằng Python lõi — chạy giống nhau trên macOS và Windows
+  const script = [
+    'import sys, zipfile, os',
+    'z = zipfile.ZipFile(sys.argv[1])',
+    'for src, dst in zip(sys.argv[3::2], sys.argv[4::2]):',
+    '    data = z.read(src)',
+    '    tmp = os.path.join(sys.argv[2], dst + ".part")',
+    '    open(tmp, "wb").write(data)',
+    '    os.replace(tmp, os.path.join(sys.argv[2], dst))'
+  ].join('\n');
+  await pyEnv.run(pyEnv.venvPython(pyEnv.VENVS.core), ['-I', '-c', script, pkg, OCR_MODELS_DIR, ...OCR_PACKAGE.files.flatMap(([src, dst]) => [src, dst])], { timeoutMs: 120000 });
+  fs.rmSync(pkg, { force: true });
+  if (!isOcrInstalled()) throw new Error('Giải nén mô hình OCR không đủ dung lượng — hãy cài lại.');
+}
+
+async function verifyOcrModels() {
+  if (!isOcrInstalled()) return { ok: false, error: 'Chưa có mô hình OCR (bin/models/ocr).' };
+  const py = pyEnv.venvPython(pyEnv.VENVS.core);
+  const code = [
+    'import sys; sys.path.insert(0, sys.argv[1])',
+    'import numpy as np, subtitle_ocr as so',
+    'o = so.SubtitleOCR(sys.argv[2])',
+    'img = np.full((96, 640, 3), 255, np.uint8)',
+    'o.detect_lines(img)',
+    'print("OK", len(o.charset))'
+  ].join('\n');
+  const r = await runCapture(py, ['-I', '-c', code, path.join(PROJECT_ROOT, 'src'), OCR_MODELS_DIR], { timeoutMs: 120000 });
+  const m = r.out.match(/OK (\d+)/);
+  if (r.code === 0 && m && Number(m[1]) > 6000) return { ok: true, version: `PP-OCRv4 (nạp thử thành công, ${m[1]} ký tự)`, sha256: null, sizeBytes: 0 };
+  return { ok: false, error: `Không nạp được mô hình OCR: ${r.out.slice(-300)}` };
 }
 
 /* ---------- Ứng dụng Windows (WebView2) ---------- */
@@ -597,6 +683,9 @@ async function verifyInstalledToolOrModel(toolId) {
   if (toolId === 'windowsApp') {
     return verifyWindowsApp();
   }
+  if (toolId === 'subtitleOcr') {
+    return verifyOcrModels();
+  }
   if (toolId === 'pythonCore') {
     let ok = await pyEnv.pythonImports(pyEnv.VENVS.core, ['faster_whisper', 'sherpa_onnx', 'ctranslate2', 'numpy']);
     if (ok) {
@@ -741,7 +830,7 @@ function getInstallableToolsCatalog() {
 
 function getInstallableToolsCatalogRaw() {
   // Không liệt kê Argos (localNmt) và Whisper tiny (localAsr): đã kiểm nghiệm chất lượng kém, thay bằng Qwen3.5 9B / Whisper small.
-  const ids = ['windowsApp', 'pythonCore', 'ytdlp', 'ffmpeg', 'webkitSniffer', 'localAsrSmall', 'speakerDiarization', 'voiceSeparation', 'localLlmQwen', 'localTts', 'vieneuTts'];
+  const ids = ['windowsApp', 'pythonCore', 'ytdlp', 'ffmpeg', 'webkitSniffer', 'localAsrSmall', 'subtitleOcr', 'speakerDiarization', 'voiceSeparation', 'localLlmQwen', 'localTts', 'vieneuTts'];
   const modelsStatus = getLocalModelsStatus();
 
   return ids
@@ -757,6 +846,9 @@ function getInstallableToolsCatalogRaw() {
       }
       if (id === 'windowsApp') {
         return { ...spec, os: process.platform, arch: process.arch, installed: isWindowsAppInstalled(), currentSizeBytes: 0 };
+      }
+      if (id === 'subtitleOcr') {
+        return { ...spec, os: process.platform, arch: process.arch, installed: isOcrInstalled(), currentSizeBytes: 0 };
       }
       if (id === 'pythonCore') {
         // Môi trường Python độc lập với model: người dùng có thể cài Python nhưng không cài Whisper
@@ -870,7 +962,7 @@ function startToolInstallJob({ toolId, userConfirmed = false, qwenLocation = nul
 
       if (!fs.existsSync(BIN_DIR)) fs.mkdirSync(BIN_DIR, { recursive: true });
 
-      const needsCorePython = ['python_core', 'python_asr_model', 'tar_bz2_tts', 'tar_bz2_separation', 'diarization_models', 'argos_packages'];
+      const needsCorePython = ['ocr_models', 'python_core', 'python_asr_model', 'tar_bz2_tts', 'tar_bz2_separation', 'diarization_models', 'argos_packages'];
       if (needsCorePython.includes(spec.archiveType)) {
         job.progress = Math.max(job.progress, 8);
         await pyEnv.ensureCoreVenv(
@@ -1021,6 +1113,8 @@ function startToolInstallJob({ toolId, userConfirmed = false, qwenLocation = nul
             if (total > 0) job.progress = Math.min(85, 40 + Math.round((dl / total) * 45));
           }
         );
+      } else if (spec.archiveType === 'ocr_models') {
+        await installOcrModels(job);
       } else if (spec.archiveType === 'webview2_app') {
         await installWindowsApp(job);
       } else if (spec.archiveType === 'mlx_llm' || spec.archiveType === 'llamacpp_llm') {
@@ -1316,6 +1410,8 @@ function getToolInstallJob(jobId) {
 }
 
 module.exports = {
+  isOcrInstalled,
+  OCR_MODELS_DIR,
   _internals: { downloadVerifiedVcRedist },
   resolveOfficialToolSource,
   getInstallableToolsCatalog,

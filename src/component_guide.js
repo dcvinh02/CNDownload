@@ -22,6 +22,7 @@ const DISK_MB = {
   ffmpeg: 44,
   webkitSniffer: 0.1,
   localAsrSmall: 464,
+  subtitleOcr: 16,
   speakerDiarization: 45,
   voiceSeparation: 38,
   localTts: 36,
@@ -32,6 +33,7 @@ const DISK_MB = {
 /** Thành phần cần "Môi trường Python AI" để chạy. */
 const REQUIRES = {
   localAsrSmall: ['pythonCore'],
+  subtitleOcr: ['pythonCore'],
   speakerDiarization: ['pythonCore'],
   voiceSeparation: ['pythonCore'],
   localTts: ['pythonCore'],
@@ -46,6 +48,7 @@ const PURPOSE = {
   ffmpeg: 'Ghép hình + tiếng, chuyển đổi định dạng, xuất video lồng tiếng.',
   webkitSniffer: 'Trình duyệt ẩn của macOS để lấy video Douyin / Kuaishou / Xiaohongshu và quét trang cá nhân.',
   localAsrSmall: 'Nhận dạng lời nói trong video (Whisper small) — bước đầu của "Phân đoạn & Dịch" để lồng tiếng.',
+  subtitleOcr: 'Đọc lời thoại từ PHỤ ĐỀ CHỮ TRUNG in sẵn trong video (OCR) thay vì nghe — chính xác hơn nhiều khi video có tiếng địa phương hoặc nhạc nền. Tự bỏ qua chữ ngoài vùng phụ đề (biển hiệu, logo).',
   speakerDiarization: 'Phân biệt nhiều người nói để mỗi người một giọng lồng tiếng (trong app mặc định TẮT).',
   voiceSeparation: 'Tách lời nói gốc khỏi nhạc nền — video lồng tiếng chỉ còn giọng mới + nhạc/tiếng động gốc.',
   localTts: 'Giọng đọc tiếng Việt nhẹ (Piper) — dự phòng khi không có VieNeu.',
@@ -119,6 +122,8 @@ function recommend(id, ctx) {
       return { level: 'recommended', text: 'Nên cài nếu bạn lồng tiếng sang tiếng Việt (giọng đọc chính của app).' };
     case 'voiceSeparation':
       return { level: 'recommended', text: 'Nên cài nếu bạn lồng tiếng (nhẹ, giúp bỏ giọng gốc).' };
+    case 'subtitleOcr':
+      return { level: 'recommended', text: 'Nên cài nếu bạn lồng tiếng video Douyin/Kuaishou có phụ đề in sẵn (rất nhẹ, ~16 MB).' };
     case 'speakerDiarization':
       return { level: 'optional', text: 'Không cần, trừ khi bạn hay lồng video nhiều nhân vật và muốn mỗi người một giọng.' };
     case 'localTts':

@@ -892,16 +892,31 @@ async function loadDownloads() {
           : f.audioStatusText
           ? `<span class="badge" style="font-size:10px;">${escapeHtml(f.audioStatusText)}</span>`
           : '';
+        const isVideo = ['mp4', 'mov', 'mkv', 'webm', 'avi', 'flv', 'm4v', 'ts'].includes(String(f.ext || '').toLowerCase());
+        const thumbHtml = isVideo
+          ? `<img class="dl-thumb" loading="lazy" alt="" src="/api/thumb?path=${encodeURIComponent(f.filePath)}" title="Bấm để phát" onclick="playDownloadedVideo('${escapeHtml(f.filePath)}', '${escapeHtml(f.fileName)}')" onerror="this.outerHTML='<div class=&quot;dl-thumb dl-thumb-empty&quot;>🎞️</div>'" />`
+          : `<div class="dl-thumb dl-thumb-empty">${f.ext === 'mp3' || f.ext === 'm4a' || f.ext === 'wav' ? '🎵' : '📄'}</div>`;
+        // Tên dễ đọc: bỏ "douyin_7698977781489486566_" ở đầu, "_50301" và đuôi file ở cuối
+        const displayTitle =
+          f.title ||
+          String(f.fileName || '')
+            .replace(/\.[a-z0-9]{2,4}$/i, '')
+            .replace(/^[a-z]+_[0-9A-Za-z=]{6,}_/, '')
+            .replace(/(?:_\d{5})?_Dubbed_([A-Z]{2})_\d{5}$/, ' (lồng tiếng $1)')
+            .replace(/_\d{5}$/, '')
+            .trim() ||
+          f.fileName;
         return `
           <div class="dl-item">
+            ${thumbHtml}
             <div class="dl-info">
               <div class="dl-name">
                 <span class="dl-platform-tag">${escapeHtml(pName)}</span>
                 <span class="s-badge" style="margin-right:2px;">${escapeHtml(extUpper)}</span>
                 ${dubBadge}
-                ${escapeHtml(f.fileName)}
               </div>
-              <div class="dl-sub">📦 ${fmtSizeMB(f.fileSize)} MB • 📁 ${escapeHtml(f.filePath)}</div>
+              <div class="dl-title" title="${escapeHtml(f.fileName)}">${escapeHtml(displayTitle)}</div>
+              <div class="dl-sub" title="${escapeHtml(f.filePath)}">📦 ${fmtSizeMB(f.fileSize)} MB • 📁 ${escapeHtml(f.folderName || '')}</div>
             </div>
             <div class="dl-actions">
               <button class="btn-sm" onclick="playDownloadedVideo('${escapeHtml(f.filePath)}', '${escapeHtml(f.fileName)}')">▶ Phát</button>
@@ -1880,6 +1895,7 @@ async function extractScriptFromSelectedVideo() {
         source: src.source,
         targetLang,
         inputLang: document.getElementById('dubInputLangSelect')?.value || 'auto',
+        transcriptSource: document.getElementById('dubTranscriptSourceSelect')?.value || 'auto',
         autoDiarize: Boolean(document.getElementById('dubAutoDiarizeCheck')?.checked),
         numSpeakers: parseInt(document.getElementById('dubNumSpeakersInput')?.value || '0', 10) || 0,
         ...trParams
@@ -1943,6 +1959,7 @@ async function resumeExtractTaskUi() {
         taskId: t.taskId,
         targetLang: document.getElementById('dubTargetLangSelect')?.value || 'vi',
         inputLang: document.getElementById('dubInputLangSelect')?.value || 'auto',
+        transcriptSource: document.getElementById('dubTranscriptSourceSelect')?.value || 'auto',
         ...trParams
       })
     });
@@ -2411,6 +2428,7 @@ async function startDubbingProcess() {
         videoPath,
         source: dubSrc.source,
         inputLang: document.getElementById('dubInputLangSelect')?.value || 'auto',
+        transcriptSource: document.getElementById('dubTranscriptSourceSelect')?.value || 'auto',
         outputDir: dubSrc.outputDir || undefined,
         targetLang,
         voiceId,
@@ -2454,12 +2472,53 @@ async function cancelDubbingProcess(jobId) {
   }
 }
 
+/* Danh sách tác vụ lồng tiếng: mặc định THU GỌN (chỉ hiện số liệu), bấm để xem; khi mở chỉ hiện 10 tác vụ mới nhất */
+const DUB_JOBS_PAGE = 10;
+let dubJobsExpanded = false;
+let dubJobsShown = DUB_JOBS_PAGE;
+let lastDubJobs = [];
+try {
+  dubJobsExpanded = localStorage.getItem('dubJobsExpanded') === '1';
+} catch (_) {}
+
+function applyDubJobsToggleUi() {
+  const wrap = document.getElementById('dubJobsList');
+  const btn = document.getElementById('dubJobsToggleBtn');
+  const caret = document.getElementById('dubJobsCaret');
+  if (wrap) wrap.style.display = dubJobsExpanded ? '' : 'none';
+  if (btn) btn.textContent = dubJobsExpanded ? 'Ẩn danh sách' : 'Hiện danh sách';
+  if (caret) caret.textContent = dubJobsExpanded ? '▾' : '▸';
+}
+
+function toggleDubJobsList(force) {
+  dubJobsExpanded = typeof force === 'boolean' ? force : !dubJobsExpanded;
+  dubJobsShown = DUB_JOBS_PAGE;
+  try {
+    localStorage.setItem('dubJobsExpanded', dubJobsExpanded ? '1' : '0');
+  } catch (_) {}
+  applyDubJobsToggleUi();
+  if (dubJobsExpanded) renderDubJobsList(lastDubJobs);
+}
+
+function showMoreDubJobs() {
+  dubJobsShown += DUB_JOBS_PAGE;
+  renderDubJobsList(lastDubJobs);
+}
+
 function renderDubJobsList(jobs) {
   const wrap = document.getElementById('dubJobsList');
   const stat = document.getElementById('dubJobsStatLabel');
   if (!wrap) return;
-  const list = Array.isArray(jobs) ? jobs : [];
-  if (stat) stat.textContent = `${list.length} tác vụ`;
+  const all = Array.isArray(jobs) ? jobs : [];
+  lastDubJobs = all;
+  const cnt = (f) => all.filter(f).length;
+  const nRun = cnt((j) => j.status === 'processing' || j.status === 'running');
+  const nDone = cnt((j) => j.status === 'completed');
+  const nErr = cnt((j) => ['failed', 'error', 'interrupted'].includes(j.status));
+  if (stat) stat.textContent = `${all.length} tác vụ${nRun ? ` • ${nRun} đang chạy` : ''} • ${nDone} hoàn tất${nErr ? ` • ${nErr} lỗi/gián đoạn` : ''}`;
+  applyDubJobsToggleUi();
+  if (!dubJobsExpanded) return; // thu gọn: không dựng danh sách dài
+  const list = all.slice(0, dubJobsShown);
 
   if (list.length === 0) {
     wrap.innerHTML = `<div class="empty-hint">Chưa có tác vụ lồng tiếng nào.</div>`;
@@ -2527,7 +2586,10 @@ function renderDubJobsList(jobs) {
       </div>
     `;
     })
-    .join('');
+    .join('') +
+    (all.length > list.length
+      ? `<div style="text-align:center;padding:8px;"><button type="button" class="btn-sm" onclick="showMoreDubJobs()">Hiện thêm ${Math.min(DUB_JOBS_PAGE, all.length - list.length)} tác vụ (còn ${all.length - list.length})</button></div>`
+      : '');
 }
 
 // ================= TAB 4: MA TRẬN KHẢ NĂNG & TRẠNG THÁI CÔNG CỤ (CAPABILITIES) =================

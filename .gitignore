@@ -72,3 +72,5 @@ CNVideoScraperPro.exe
 CNVideoScraperPro.exe.config
 CNVideoScraperPro.exe.new
 bin/windows_app/
+config/*.backup-*.json
+config/thumbs/

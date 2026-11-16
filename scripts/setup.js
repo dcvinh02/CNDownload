@@ -34,7 +34,7 @@ const QWEN_DIR_ARG = (Array.from(args).find((a) => a.startsWith('--qwen-dir=')) 
 const INTERACTIVE = !YES && Boolean(process.stdin.isTTY);
 
 // Thứ tự hỏi: công cụ tải video → nền tảng AI → model lồng tiếng → tùy chọn → AI dịch (lớn nhất, cuối cùng)
-const ORDER = ['windowsApp', 'ytdlp', 'ffmpeg', 'webkitSniffer', 'pythonCore', 'localAsrSmall', 'vieneuTts', 'voiceSeparation', 'localTts', 'speakerDiarization', 'localLlmQwen'];
+const ORDER = ['windowsApp', 'ytdlp', 'ffmpeg', 'webkitSniffer', 'pythonCore', 'localAsrSmall', 'subtitleOcr', 'vieneuTts', 'voiceSeparation', 'localTts', 'speakerDiarization', 'localLlmQwen'];
 
 let rl = null;
 function ask(q) {

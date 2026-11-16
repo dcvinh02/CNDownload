@@ -435,7 +435,16 @@
               <select id="dubInputLangSelect" class="folder-input" style="height:36px;" title="Tiếng Anh dùng module chia câu riêng; tiếng Trung giữ nguyên cách xử lý hiện tại">
                 <option value="auto">🌐 Tự động nhận diện</option>
                 <option value="zh">🇨🇳 Tiếng Trung</option>
+                <option value="zh_d">🇨🇳 Tiếng Trung — phương ngữ (Tứ Xuyên...)</option>
                 <option value="en">🇺🇸 Tiếng Anh (module riêng)</option>
+              </select>
+            </div>
+            <div class="dub-ctrl-col" style="max-width:230px;">
+              <div style="font-size:12px;font-weight:700;margin-bottom:5px;">Nguồn lời thoại:</div>
+              <select id="dubTranscriptSourceSelect" class="folder-input" style="height:36px;" title="Video có phụ đề chữ Trung in sẵn thì đọc phụ đề (OCR) chính xác hơn nghe — nhất là tiếng địa phương, nhạc nền to">
+                <option value="auto">✨ Tự động (có phụ đề → đọc phụ đề, không có → nghe)</option>
+                <option value="ocr">🔤 Đọc phụ đề trong hình (OCR)</option>
+                <option value="asr">👂 Nghe giọng nói (Whisper)</option>
               </select>
             </div>
             <div class="dub-ctrl-col" style="max-width:210px;">
@@ -611,11 +620,14 @@
 
         <!-- Danh sách tiến trình & lịch sử lồng tiếng -->
         <section class="card">
-          <div class="section-subtitle">
-            <span>Tiến trình & Các bản Video đã Lồng tiếng</span>
-            <span id="dubJobsStatLabel" style="font-size:11.5px;color:#64748b;">0 tác vụ</span>
+          <div class="section-subtitle" style="cursor:pointer;" onclick="toggleDubJobsList()" title="Bấm để hiện / ẩn danh sách">
+            <span><span id="dubJobsCaret">▸</span> Tiến trình & Các bản Video đã Lồng tiếng</span>
+            <span style="display:flex;align-items:center;gap:8px;">
+              <span id="dubJobsStatLabel" style="font-size:11.5px;color:#64748b;">0 tác vụ</span>
+              <button type="button" class="btn-sm" id="dubJobsToggleBtn" onclick="event.stopPropagation(); toggleDubJobsList()">Hiện danh sách</button>
+            </span>
           </div>
-          <div id="dubJobsList" class="downloads-list">
+          <div id="dubJobsList" class="downloads-list" style="display:none;">
             <div class="empty-hint">Chưa có tác vụ lồng tiếng nào.</div>
           </div>
         </section>

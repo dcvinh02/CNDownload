@@ -26,12 +26,16 @@ const TEST_DOWNLOAD_DIR = path.join(TEST_TMP_ROOT, 'downloads');
 
 process.env.CN_STORAGE_CONFIG_FILE = TEST_CONFIG_FILE;
 process.env.CN_DEFAULT_DOWNLOAD_DIR = TEST_DOWNLOAD_DIR;
+// Lịch sử tác vụ lồng tiếng, cấu hình AI, lựa chọn cài đặt... ghi vào thư mục tạm — không lẫn vào danh sách của người dùng
+process.env.CN_AI_CONFIG_DIR = path.join(TEST_TMP_ROOT, 'config');
 process.env.OFFLINE_TEST_MODE = '1';
 
 const USER_REAL_CONFIG_PATH = path.join(__dirname, '..', 'config', 'storage_settings.json');
 const userConfigBefore = fs.existsSync(USER_REAL_CONFIG_PATH)
   ? fs.readFileSync(USER_REAL_CONFIG_PATH, 'utf8')
   : null;
+const USER_DUB_JOBS_PATH = path.join(__dirname, '..', 'config', 'dub_jobs_state.json');
+const userDubJobsBefore = fs.existsSync(USER_DUB_JOBS_PATH) ? fs.readFileSync(USER_DUB_JOBS_PATH, 'utf8') : null;
 
 const {
   PLATFORMS,
@@ -790,6 +794,12 @@ async function runAllTests() {
   assertTest(
     userConfigBefore === userConfigAfter,
     'Bộ kiểm thử cô lập hoàn toàn, KHÔNG ghi đè file cấu hình của người dùng (config/storage_settings.json)'
+  );
+  // (App của người dùng có thể đang chạy và tự ghi file này → chỉ kiểm tra không có tác vụ của BỘ TEST này)
+  const userDubJobsAfter = fs.existsSync(USER_DUB_JOBS_PATH) ? fs.readFileSync(USER_DUB_JOBS_PATH, 'utf8') : '';
+  assertTest(
+    !String(userDubJobsAfter || '').includes(path.basename(TEST_TMP_ROOT)) && (userDubJobsBefore === null || !String(userDubJobsBefore).includes(path.basename(TEST_TMP_ROOT))),
+    'Bộ kiểm thử KHÔNG ghi tác vụ thử vào lịch sử lồng tiếng của người dùng (config/dub_jobs_state.json)'
   );
 
   // Dọn dẹp thư mục tạm sau khi kiểm thử

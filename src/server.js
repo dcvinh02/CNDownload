@@ -11,7 +11,8 @@ const {
   startRealDownload,
   cancelDownloadJob,
   removeDownloadItem,
-  getDownloadsList
+  getDownloadsList,
+  getFfmpegPath
 } = require('./extractors');
 const { DESKTOP_UA } = require('./extractors/custom_parsers');
 const {
@@ -128,6 +129,51 @@ function localOriginGuard(req, res, next) {
 const MEDIA_EXTS = new Set(['.mp4', '.mov', '.webm', '.mkv', '.avi', '.flv', '.mp3', '.wav', '.m4a', '.aac', '.gif']);
 
 /** Chỉ phục vụ file media nằm trong thư mục lưu của ứng dụng hoặc thư mục nghe thử tạm. */
+const THUMB_DIR = path.join(process.env.CN_AI_CONFIG_DIR || path.join(__dirname, '..', 'config'), 'thumbs');
+const thumbJobs = new Map();
+let thumbRunning = 0;
+const thumbWaiters = [];
+function getVideoThumbnail(filePath) {
+  const st = fs.statSync(filePath);
+  const key = require('crypto').createHash('sha1').update(`${path.resolve(filePath)}|${st.size}|${st.mtimeMs}`).digest('hex');
+  const out = path.join(THUMB_DIR, `${key}.jpg`);
+  if (fs.existsSync(out) && fs.statSync(out).size > 0) return Promise.resolve(out);
+  if (thumbJobs.has(key)) return thumbJobs.get(key);
+  const run = async () => {
+    if (thumbRunning >= 2) await new Promise((r) => thumbWaiters.push(r));
+    thumbRunning++;
+    try {
+      fs.mkdirSync(THUMB_DIR, { recursive: true });
+      const ff = getFfmpegPath();
+      const tmp = `${out}.part.jpg`;
+      for (const at of ['1', '0']) {
+        const ok = await new Promise((resolve) => {
+          const p = spawn(ff, ['-y', '-hide_banner', '-loglevel', 'error', '-ss', at, '-i', filePath, '-frames:v', '1', '-vf', 'scale=240:-2', '-q:v', '6', tmp], { windowsHide: true });
+          const t = setTimeout(() => p.kill('SIGKILL'), 20000);
+          p.on('error', () => resolve(false));
+          p.on('close', (code) => {
+            clearTimeout(t);
+            resolve(code === 0 && fs.existsSync(tmp) && fs.statSync(tmp).size > 0);
+          });
+        });
+        if (ok) {
+          fs.renameSync(tmp, out);
+          return out;
+        }
+      }
+      return null;
+    } finally {
+      thumbRunning--;
+      const next = thumbWaiters.shift();
+      if (next) next();
+      thumbJobs.delete(key);
+    }
+  };
+  const pr = run();
+  thumbJobs.set(key, pr);
+  return pr;
+}
+
 function isServableMediaPath(filePath) {
   if (!filePath || typeof filePath !== 'string') return false;
   let real;
@@ -141,7 +187,7 @@ function isServableMediaPath(filePath) {
   try {
     const ov = getStorageOverview();
     if (ov && ov.rootDir) roots.push(ov.rootDir);
-    for (const d of (ov && ov.platformDirs) || []) if (d && d.path) roots.push(d.path);
+    for (const d of Object.values((ov && ov.platforms) || {})) if (d && (d.effectiveDir || d.customDir)) roots.push(d.effectiveDir || d.customDir);
   } catch (_) {}
   roots.push(path.join(os.tmpdir(), 'cn_video_scraper_voice_previews'));
   // File đầu ra do chính tác vụ lồng tiếng tạo (kể cả khi người dùng chọn thư mục đầu ra bên ngoài) — khớp đúng từng file
@@ -490,7 +536,7 @@ function createServer() {
 
   app.post('/api/dubbing/extract-script', async (req, res) => {
     try {
-      const { videoPath, targetLang, customSegments, cloudConsent, translationProvider, translationStyle, aiModel, autoDiarize, numSpeakers, inputLang } =
+      const { videoPath, targetLang, customSegments, cloudConsent, translationProvider, translationStyle, aiModel, autoDiarize, numSpeakers, inputLang, transcriptSource } =
         req.body || {};
       const out = await extractAndPrepareSegments(videoPath, targetLang || 'vi', customSegments, {
         cloudConsent: Boolean(cloudConsent),
@@ -499,7 +545,8 @@ function createServer() {
         aiModel,
         autoDiarize: autoDiarize === true,
         numSpeakers,
-        inputLang
+        inputLang,
+        transcriptSource
       });
       res.json({ success: true, ...out });
     } catch (err) {
@@ -672,6 +719,22 @@ function createServer() {
       return res.status(404).send('File not found');
     }
     sendMediaFile(req, res, filePath);
+  });
+
+  // Ảnh thu nhỏ của video đã tải (cắt 1 khung hình bằng FFmpeg, lưu đệm ở config/thumbs, tối đa 2 lệnh cắt cùng lúc)
+  app.get('/api/thumb', async (req, res) => {
+    const filePath = req.query.path;
+    if (!filePath || !fs.existsSync(filePath) || !isServableMediaPath(filePath)) return res.status(404).end();
+    if (!/\.(mp4|mov|mkv|webm|avi|flv|m4v|ts)$/i.test(filePath)) return res.status(404).end();
+    try {
+      const out = await getVideoThumbnail(filePath);
+      if (!out) return res.status(404).end();
+      res.setHeader('Cache-Control', 'private, max-age=86400');
+      res.type('jpg');
+      fs.createReadStream(out).pipe(res);
+    } catch (_) {
+      res.status(404).end();
+    }
   });
 
   app.get('/api/proxy-media', async (req, res) => {

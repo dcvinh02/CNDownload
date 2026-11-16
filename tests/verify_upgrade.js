@@ -232,6 +232,7 @@ async function main() {
   let mode = 'ok';
   let lastBody = null;
   let lastModel = null;
+  const userTexts = [];
   const stub = http.createServer((req, res) => {
     let body = '';
     req.on('data', (c) => (body += c));
@@ -280,7 +281,11 @@ async function main() {
       }
       lastModel = (lastBody && lastBody.model) || (req.url.match(/models\/([^:]+):/) || [])[1];
       let segs = input.segments.map((s) => ({ ...s, translated_text: `Bản dịch ${s.id}` }));
-      if (mode === 'drop-one-then-ok') {
+      userTexts.push(userText);
+      if (mode === 'leak-cjk-id2-always') {
+        // Model "cứng đầu": câu id=2 lần nào cũng sót chữ Hán (giống Qwen với "放宽"), các câu khác đúng
+        segs = segs.map((s) => (Number(s.id) === 2 ? { ...s, translated_text: 'Anh em放宽 tâm trí chút đi.' } : s));
+      } else if (mode === 'drop-one-then-ok') {
         mode = 'ok';
         segs = segs.slice(1);
       } else if (mode === 'bad-json') {
@@ -454,6 +459,24 @@ async function main() {
     assert(r.translations.every((t) => !/[\u4e00-\u9fff]/.test(t)), r.translations.join('|'));
     assert(r.stats.problems.some((p) => /chữ Hán/.test(p)), JSON.stringify(r.stats.problems));
     return `retries=${r.stats.retries}; vấn đề phát hiện: ${r.stats.problems[0]}`;
+  });
+  await check('Một câu AI luôn dịch sót chữ Hán: yêu cầu lại có chỉ rõ từ chưa dịch; vẫn lỗi thì để trống câu đó + cảnh báo, KHÔNG hỏng cả tác vụ', async () => {
+    mode = 'leak-cjk-id2-always';
+    userTexts.length = 0;
+    try {
+      const r = await translateSegmentsWithLLM(segsIn, { sourceLang: 'zh', targetLang: 'vi', providerId: 'openai', useCache: false });
+      const i2 = segsIn.findIndex((x, i) => Number(x.id ?? x.index ?? i + 1) === 2);
+      assert(r.translations.length === segsIn.length, `số câu ${r.translations.length}`);
+      assert(r.translations[i2] === '' && r.translations.every((t, i) => i === i2 || (t && !/[\u4e00-\u9fff]/.test(t))), r.translations.join('|'));
+      assert(r.stats.problems.some((p) => /id=2 chưa dịch được/.test(p)), JSON.stringify(r.stats.problems));
+      assert(userTexts.some((u) => /Phải dịch nghĩa cả các từ: 放宽/.test(u)), 'yêu cầu lại không chỉ rõ từ chưa dịch');
+      assert(!userTexts.some((u) => /SAI CẤU TRÚC/.test(u)), 'lỗi chất lượng bị báo nhầm là sai cấu trúc');
+      const { isStructuralProblem } = llmInternals;
+      assert(!isStructuralProblem(['Phân đoạn id=106: còn sót chữ Hán/Nhật/Hàn ("Anh em放宽").']) && isStructuralProblem(['Phân đoạn vị trí 1 phải có id=3 nhưng nhận 4.']), 'phân loại lỗi sai');
+      return `${r.translations.length - 1}/${r.translations.length} câu dịch được, câu id=2 để trống kèm cảnh báo • ${userTexts.length} request`;
+    } finally {
+      mode = 'ok';
+    }
   });
   await check('Gateway: model bị ngừng (404) → ghi nhớ "không khả dụng" và tự chuyển model khác cùng nhà cung cấp', async () => {
     // cung cấp danh sách model thật giả lập có 2 model; model cấu hình bị 404 ở lần gọi đầu
@@ -844,6 +867,103 @@ async function main() {
     assert(!a.problem && !b.problem, `báo lỗi nhầm: ${a.problem || b.problem}`);
     assert(c.problem && /lặp từ/.test(c.problem), 'phải bắt lỗi lặp từ khi câu gốc không lặp');
     return 'nguồn lặp → chấp nhận • nguồn không lặp → báo lỗi';
+  });
+
+  /* ---------------- 4a3. OCR phụ đề chữ Trung in sẵn trong hình ---------------- */
+  console.log('\n--- [4a3] OCR phụ đề in sẵn (PP-OCRv4) ---');
+  // Video thử dựng bằng FFmpeg drawtext với font CJK có sẵn của hệ điều hành: 4 câu phụ đề ở đáy (có mốc thời gian biết trước)
+  // + chữ "nhiễu" phải bị bỏ qua: logo góc phải suốt video, biển hiệu ở trên cùng, chữ vàng bên trái xuất hiện 2 giây.
+  const OCR_LINES = [
+    ['老板拿双肉色的丝袜', 0.5, 3.0],
+    ['我要肉色的你拿黑的做啥子', 4.0, 6.5],
+    ['是帽子噻严丝合缝的', 8.0, 10.5],
+    ['你不就这个色嗦', 12.0, 14.5]
+  ];
+  const OCR_NOISE = ['抖音号12345', '欢迎光临小卖部', '超市'];
+  const ocrDir = path.join(TMP, 'ocr_video');
+  const ocrVideo = path.join(ocrDir, 'phu_de.mp4');
+  const ocrPlain = path.join(ocrDir, 'khong_phu_de.mp4');
+  const tools = require('../src/tool_installer');
+  const ocrWorker = (video, mode) => {
+    const r = spawnSync(PY_CORE, [path.join(ROOT, 'src', 'local_ai_worker.py'), 'ocr_subtitles', '--video', video, '--models', tools.OCR_MODELS_DIR, '--ffmpeg', FFMPEG, '--mode', mode], { encoding: 'utf8', env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, timeout: 300000 });
+    const line = String(r.stdout || '').split(/\r?\n/).reverse().find((l) => l.startsWith('WORKER_JSON:'));
+    if (!line) throw new Error(`worker không trả JSON: ${String(r.stderr || '').slice(-400)}`);
+    return JSON.parse(line.slice('WORKER_JSON:'.length));
+  };
+  const ocrPrereq = () => {
+    if (!fs.existsSync(PY_CORE)) throw skip('Chưa cài môi trường Python lõi.', true);
+    if (!tools.isOcrInstalled()) throw skip('Chưa cài mô hình OCR phụ đề (node scripts/setup.js → subtitleOcr).', true);
+    if (!fs.existsSync(ocrVideo)) throw skip('Không có font chữ Trung của hệ điều hành để dựng video thử.', true);
+  };
+  {
+    const fontCandidates = process.platform === 'win32'
+      ? ['msyh.ttc', 'msyh.ttf', 'simhei.ttf', 'simsun.ttc'].map((f) => path.join(process.env.WINDIR || 'C:\\Windows', 'Fonts', f))
+      : ['/System/Library/Fonts/Hiragino Sans GB.ttc', '/System/Library/Fonts/STHeiti Medium.ttc', '/System/Library/Fonts/STHeiti Light.ttc', '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc'];
+    const font = fontCandidates.find((f) => fs.existsSync(f));
+    if (font) {
+      fs.mkdirSync(ocrDir, { recursive: true });
+      // Chép font + chữ vào thư mục video, gọi FFmpeg với cwd đó → đường dẫn trong bộ lọc không có ký tự ':' / '\' của Windows
+      fs.copyFileSync(font, path.join(ocrDir, 'font.ttc'));
+      const dt = (file, extra) => `drawtext=fontfile=font.ttc:textfile=${file}:${extra}`;
+      OCR_NOISE.forEach((t, i) => fs.writeFileSync(path.join(ocrDir, `n${i}.txt`), t, 'utf8'));
+      OCR_LINES.forEach(([t], i) => fs.writeFileSync(path.join(ocrDir, `s${i}.txt`), t, 'utf8'));
+      const logo = dt('n0.txt', 'fontsize=28:fontcolor=white:x=w-tw-30:y=h-60');
+      const filters = [
+        dt('n1.txt', 'fontsize=44:fontcolor=white:x=(w-tw)/2:y=60'),
+        logo,
+        dt('n2.txt', "fontsize=40:fontcolor=yellow:x=60:y=h*0.62:enable='between(t,5,7)'"),
+        ...OCR_LINES.map(([, a, b], i) => dt(`s${i}.txt`, `fontsize=40:fontcolor=white:borderw=3:bordercolor=black:x=(w-tw)/2:y=h*0.80:enable='between(t,${a},${b})'`))
+      ];
+      // Có track âm thanh (nhạc nền 220 Hz nhỏ, không lời) như video thật
+      const mk = (vf, out) => spawnSync(FFMPEG, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=0x336655:s=1280x720:d=16:r=25', '-f', 'lavfi', '-i', 'sine=frequency=220:sample_rate=16000:duration=16', '-vf', vf, '-af', 'volume=0.05', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', path.basename(out)], { cwd: ocrDir, encoding: 'utf8' });
+      const r1 = mk(filters.join(','), ocrVideo);
+      const r2 = mk(logo, ocrPlain);
+      if (r1.status !== 0 || r2.status !== 0) console.log(`  (không dựng được video OCR: ${String(r1.stderr || r2.stderr).slice(-300)})`);
+    }
+  }
+  await check('OCR phụ đề: đọc đúng 4 câu + đúng mốc thời gian; bỏ qua logo góc, biển hiệu trên cùng và chữ ngẫu nhiên bên cạnh', async () => {
+    ocrPrereq();
+    const r = ocrWorker(ocrVideo, 'extract');
+    assert(r.ok, `OCR lỗi: ${r.error}`);
+    const got = r.segments.map((s) => s.sourceText);
+    assert(got.length === OCR_LINES.length, `số câu ${got.length}: ${JSON.stringify(got)}`);
+    OCR_LINES.forEach(([t, a, b], i) => {
+      const s = r.segments[i];
+      assert(s.sourceText === t, `câu ${i + 1}: "${s.sourceText}" ≠ "${t}"`);
+      assert(Math.abs(s.startSec - a) <= 0.3 && Math.abs(s.endSec - b) <= 0.3, `câu ${i + 1} lệch thời gian: ${s.startSec}–${s.endSec} (đúng ${a}–${b})`);
+    });
+    const all = got.join('|');
+    assert(!OCR_NOISE.some((n) => all.includes(n.replace(/\d+/g, ''))), `lẫn chữ nhiễu: ${all}`);
+    return r.segments.map((s) => `${s.startSec}–${s.endSec} ${s.sourceText}`).join(' • ');
+  });
+  await check('OCR tự nhận biết: video có phụ đề → có; video chỉ có logo → không (để chuyển sang nghe giọng nói)', async () => {
+    ocrPrereq();
+    const a = ocrWorker(ocrVideo, 'probe');
+    const b = ocrWorker(ocrPlain, 'probe');
+    const c = ocrWorker(ocrPlain, 'extract');
+    assert(a.ok && a.hasSubtitles === true, `video có phụ đề: ${JSON.stringify(a)}`);
+    assert(b.ok && b.hasSubtitles === false, `video không phụ đề: ${JSON.stringify(b)}`);
+    assert(!c.ok && c.errorCode === 'NO_SUBTITLES', `trích xuất video không phụ đề phải báo NO_SUBTITLES: ${JSON.stringify(c)}`);
+    return `có phụ đề: tỉ lệ ${a.ratio}, ${a.distinct} câu khác nhau • chỉ logo: tỉ lệ ${b.ratio} → không`;
+  });
+  await check('Phân đoạn & Dịch (nguồn lời thoại "Tự động"): video có phụ đề in sẵn → dùng OCR, không chạy nhận dạng giọng nói', async () => {
+    ocrPrereq();
+    const t0 = dub.startExtractTask({ videoPath: ocrVideo, source: 'user', targetLang: 'vi', translationProvider: 'local', transcriptSource: 'auto' });
+    let t;
+    for (let i = 0; i < 600; i++) {
+      t = dub.getExtractTask(t0.taskId);
+      if (t.status !== 'running') break;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    const msgs = t.logs.map((l) => l.msg);
+    assert(msgs.some((m) => /OCR/.test(m)), `không thấy log OCR: ${msgs.slice(-5).join(' | ')}`);
+    assert(!msgs.some((m) => /Bước 2: nhận dạng giọng nói bằng/.test(m)), 'vẫn chạy nhận dạng giọng nói');
+    if (t.status !== 'completed') {
+      if (/Thiếu mô hình dịch Offline|Chưa cài bộ dịch Offline/.test((t.errors || []).join(' '))) throw skip('OCR đúng nhưng chưa cài bộ dịch Offline để hoàn tất.', true);
+      throw new Error(`${t.status}: ${(t.errors || []).join(' ')}`);
+    }
+    assert(t.result.segments.length === OCR_LINES.length && t.result.segments.every((s, i) => s.sourceText === OCR_LINES[i][0]), `câu gốc: ${JSON.stringify(t.result.segments.map((s) => s.sourceText))}`);
+    return `${t.result.segments.length} câu từ OCR, dịch xong trong ${t.elapsedSec}s: "${t.result.segments[0].translatedText}"`;
   });
 
   /* ---------------- 4b0. Qwen dùng chung (Windows: %USERPROFILE%\QwenLocal) ---------------- */

@@ -72,6 +72,12 @@ npm start
 | Quét hồ sơ Douyin/Kuaishou bằng WebKit | ✅ | Có điều kiện (dùng Cookie + yt-dlp) |
 | Giọng đọc hệ điều hành | Giọng macOS (Linh, Tingting...) | Chỉ giọng tiếng Anh mặc định của Windows |
 
+## 🆕 Đọc phụ đề in sẵn (OCR), chế độ phương ngữ, ảnh thu nhỏ
+
+- **🔤 Nguồn lời thoại**: *Tự động* (video có phụ đề chữ Trung in sẵn → đọc phụ đề bằng OCR, không có → nghe bằng Whisper) • *OCR* • *Nghe giọng nói*. OCR dùng PaddleOCR PP-OCRv4 (ONNX, 16 MB), chỉ đọc vùng phụ đề ở nửa dưới khung hình, chỉ nhận dòng chữ Trung căn giữa, cùng độ cao và có độ tin cậy cao; chữ đứng yên quá lâu (logo, watermark), biển hiệu, chữ lệch sang cạnh đều bị bỏ qua. Chính xác hơn nhiều so với nghe khi video có nhạc nền hoặc tiếng địa phương.
+- **🇨🇳 Tiếng Trung — phương ngữ**: Whisper được gợi ý bằng tiêu đề video và từ vựng địa phương (Tứ Xuyên…), dùng cùng mô hình small (không tải thêm).
+- **Ảnh thu nhỏ** cho từng video trong danh sách đã tải.
+
 ## 🆕 Bản 1.2.0 — AI Local Qwen, AI Gateway, sửa đồng bộ/nghe thử/thanh tải
 
 - **AI dịch Local (Qwen3.5-9B, Apple MLX)**: không cần API Key, không gửi dữ liệu ra ngoài; được chọn sau khi đánh giá thật Qwen3.5-4B/9B, Qwen2.5-7B, Argos. Model thừa đã xóa.
@@ -132,6 +138,7 @@ npm start
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Sherpa-ONNX Piper Neural VITS (`vi_piper_vais1000`)** | Tổng hợp giọng đọc tiếng Việt chất lượng cao (Nữ Bắc — Đề xuất mặc định) | `62 MB` | MIT License | RAM >= 512 MB (CPU) | **Đã cài đặt & Hoạt động Offline** |
 | **Sherpa-ONNX Piper Neural VITS (`vi_piper_25hours` / `vivos`)** | Giọng Nam Bắc, Nam/Nữ Nam Bộ và 65 người nói VIVOS | `60 - 75 MB` | MIT / Apache 2.0 | RAM >= 512 MB (CPU) | **Đã cài đặt & Hoạt động Offline** |
+| **PaddleOCR PP-OCRv4 (ONNX, `rapidocr_onnxruntime` 1.4.4)** | Đọc phụ đề chữ Trung in sẵn trong hình (nguồn lời thoại thay cho nghe) | `16 MB` | Apache-2.0 | RAM >= 1 GB (CPU) | **Hỏi khi cài** (khuyến nghị) |
 | **Faster-Whisper Local (`small`)** | Nhận diện giọng nói thành lời thoại thực tế có mốc thời gian (STT/ASR Offline) | `464 MB` | MIT License | RAM >= 2 GB (CPU) | **Cài tự động** (bản tiny/base đã loại vì kém) |
 | **Qwen3.5 9B (MLX 4-bit trên Mac • GGUF Q4_K_M + llama.cpp trên Windows)** | Dịch Trung/Nhật/Hàn → Việt ngay trên máy, giữ ID/mốc thời gian | `5,6 – 5,8 GB` | Apache-2.0 / MIT | Mac M1+ RAM 8 GB • Windows RAM 16 GB | **Cài tự động trên Windows** (Mac: `npm run setup:full`). Thay Argos (đã loại vì kém) |
 | **macOS AVSpeechSynthesizer / Windows SAPI** | Tổng hợp giọng đọc TTS hệ điều hành (Việt, Trung, Anh, Nhật, Hàn) | `0 MB` | System Native | RAM >= 256 MB (CPU) | **Có sẵn trong Hệ điều hành** |
