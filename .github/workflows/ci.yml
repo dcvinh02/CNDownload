@@ -63,7 +63,8 @@ jobs:
           $cat = (Invoke-WebRequest -UseBasicParsing http://127.0.0.1:3889/api/tools/catalog).Content | ConvertFrom-Json
           $tools = if ($cat.tools) { $cat.tools } else { $cat }
           $tools | ForEach-Object { Write-Host ("{0,-20} {1}" -f $_.id, $(if ($_.installed) { 'đã cài' } else { 'CHƯA CÀI' })) }
-          $missing = @($tools | Where-Object { -not $_.installed })
+          # localAsrSmall (Whisper) chỉ còn là tùy chọn, setup không cài mặc định (đã thay bằng SenseVoice)
+          $missing = @($tools | Where-Object { -not $_.installed -and $_.id -ne 'localAsrSmall' })
           Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
           Get-Process CNVideoScraperPro, node, llama-server -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
           if ($missing.Count -gt 0) { throw ("Còn thiếu: " + (($missing | ForEach-Object { $_.id }) -join ', ')) }
