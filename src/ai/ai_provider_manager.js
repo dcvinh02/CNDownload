@@ -337,7 +337,7 @@ const geminiAdapter = {
       .map((m) => ({ id: String(m.name || '').replace(/^models\//, ''), label: m.displayName || m.name }))
       .filter((m) => m.id && !/embedding|aqa|imagen|veo|tts|image|live/i.test(m.id));
   },
-  async generate({ apiKey, baseUrl, model, system, user, jsonSchema, temperature = 0.3, signal }) {
+  async generate({ apiKey, baseUrl, model, system, user, jsonSchema, temperature = 0.3, signal, timeoutMs: reqTimeoutMs }) {
     const base = (baseUrl || this.defaultBaseUrl).replace(/\/+$/, '');
     const generationConfig = { temperature };
     if (jsonSchema) {
@@ -356,7 +356,7 @@ const geminiAdapter = {
           generationConfig
         },
         signal,
-        timeoutMs: 75000
+        timeoutMs: Math.max(75000, reqTimeoutMs || 0)
       });
     let data;
     try {
@@ -407,7 +407,7 @@ function makeOpenAiAdapter(id, defaultBaseUrl) {
         .filter((m) => m.id && !/embedding|whisper|tts|dall-e|moderation|audio|realtime|image|transcribe|search/i.test(m.id))
         .sort((a, b) => a.id.localeCompare(b.id));
     },
-    async generate({ apiKey, baseUrl, model, system, user, jsonSchema, temperature = 0.3, signal }) {
+    async generate({ apiKey, baseUrl, model, system, user, jsonSchema, temperature = 0.3, signal, timeoutMs: reqTimeoutMs }) {
       const base = (baseUrl || this.defaultBaseUrl || '').replace(/\/+$/, '');
       if (!base) throw new AiProviderError('BAD_REQUEST', 'Chưa nhập Base URL cho nhà cung cấp tương thích OpenAI.', { providerId: id });
       const body = {
@@ -419,7 +419,7 @@ function makeOpenAiAdapter(id, defaultBaseUrl) {
       };
       if (temperature !== null) body.temperature = temperature;
       if (jsonSchema) body.response_format = { type: 'json_object' };
-      const timeoutMs = isLocalhostUrl(base) ? LOCAL_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
+      const timeoutMs = isLocalhostUrl(base) ? LOCAL_TIMEOUT_MS : Math.max(DEFAULT_TIMEOUT_MS, reqTimeoutMs || 0);
       let data;
       try {
         data = await httpJson(id, `${base}/chat/completions`, {
@@ -950,8 +950,18 @@ function buildTargetChain(featureId, override = {}, allowCloud = true) {
  * Gọi model sinh văn bản qua AI Gateway:
  * hàng đợi theo nhà cung cấp → kiểm hạn mức → thử lại lỗi tạm thời → tự chuyển sang nhà cung cấp dự phòng → ghi usage & log.
  */
-async function generateText({ featureId = 'translation', providerId, model, system, user, jsonSchema = null, temperature = 0.3, signal, allowCloud = true } = {}) {
-  const { chain, skipped } = buildTargetChain(featureId, { providerId, model }, allowCloud);
+/** Nhà cung cấp chính sẽ dùng cho chức năng (providerId truyền vào, hoặc cấu hình của chức năng). */
+function primaryProviderFor(featureId, providerId) {
+  if (providerId) return providerId;
+  const feat = (loadSettings().features || {})[featureId] || {};
+  return feat.providerId || '';
+}
+
+async function generateText({ featureId = 'translation', providerId, model, system, user, jsonSchema = null, temperature = 0.3, signal, allowCloud = true, timeoutMs, cloudOnly = false } = {}) {
+  const built = buildTargetChain(featureId, { providerId, model }, allowCloud);
+  const skipped = built.skipped;
+  // cloudOnly: yêu cầu lớn (cả kịch bản) không được tự rơi xuống AI Local — người gọi sẽ tự chia lô nhỏ cho AI Local
+  const chain = cloudOnly ? built.chain.filter((t) => !isLocalProvider(t.providerId)) : built.chain;
   if (chain.length === 0) {
     const reason = skipped.map((x) => `${PROVIDER_META[x.providerId]?.name || x.providerId}: ${x.reason}`).join(' | ');
     throw new AiProviderError('NO_KEY', `Không có nhà cung cấp AI nào sẵn sàng cho chức năng này. ${reason}`);
@@ -967,7 +977,7 @@ async function generateText({ featureId = 'translation', providerId, model, syst
         await acquireSlot(target.providerId, signal);
         let out;
         try {
-          out = await rt.adapter.generate({ apiKey: rt.apiKey, baseUrl: rt.baseUrl, model: target.model, system, user, jsonSchema, temperature, signal });
+          out = await rt.adapter.generate({ apiKey: rt.apiKey, baseUrl: rt.baseUrl, model: target.model, system, user, jsonSchema, temperature, signal, timeoutMs });
         } finally {
           releaseSlot(target.providerId);
         }
@@ -1037,6 +1047,7 @@ module.exports = {
   getProviderModels,
   LOCAL_PROVIDER_ID,
   isLocalProvider,
+  primaryProviderFor,
   getAiLogs,
   getQueueSnapshot,
   buildTargetChain,
@@ -1047,6 +1058,7 @@ module.exports = {
   testProviderConnection,
   resolveFeatureTarget,
   isProviderReady,
+  loadSettings,
   generateText,
   parseJsonFromModel,
   redactSecrets,

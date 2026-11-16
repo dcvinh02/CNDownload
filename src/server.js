@@ -39,7 +39,9 @@ const {
 const {
   getInstallableToolsCatalog,
   startToolInstallJob,
-  getToolInstallJob
+  getToolInstallJob,
+  getUninstallPlan,
+  uninstallTool
 } = require('./tool_installer');
 const {
   ACCOUNT_SCAN_SUPPORT,
@@ -69,6 +71,7 @@ const {
   LOCAL_MODELS_CATALOG,
   TRANSLATION_PROVIDERS_CATALOG,
   TRANSLATION_STYLES,
+  previewOcrFrame,
   LANGUAGE_INFO,
   DUBBING_PIPELINE_STEPS,
   getSupportedVoices,
@@ -345,6 +348,43 @@ function createServer() {
       res.json({ success: true, job });
     } catch (err) {
       res.status(err.code === 'QWEN_LOCATION_REQUIRED' ? 409 : 400).json({ success: false, error: err.message, code: err.code || null, details: err.details || null });
+    }
+  });
+
+  // Tinh chỉnh OCR phụ đề: đọc / lưu / đặt lại tham số, xem thử 1 khung hình
+  app.get('/api/ocr/settings', (req, res) => {
+    const o = require('./ocr_settings');
+    res.json({ success: true, settings: o.loadOcrSettings(), defaults: o.OCR_DEFAULTS, limits: o.OCR_LIMITS });
+  });
+  app.post('/api/ocr/settings', (req, res) => {
+    const o = require('./ocr_settings');
+    const body = req.body || {};
+    const settings = body.reset ? o.resetOcrSettings() : o.saveOcrSettings(body.settings || {});
+    res.json({ success: true, settings });
+  });
+  app.post('/api/ocr/preview', async (req, res) => {
+    try {
+      const { videoPath, at, settings, subLang } = req.body || {};
+      const r = await previewOcrFrame(String(videoPath || ''), Number(at) || 0, settings || null, subLang === 'en' ? 'en' : 'zh');
+      res.json({ success: true, preview: r });
+    } catch (err) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  // Gỡ cài đặt công cụ / model để giải phóng dung lượng (người dùng xác nhận trong app)
+  app.get('/api/tools/uninstall-plan', (req, res) => {
+    const plan = getUninstallPlan(String(req.query.toolId || ''));
+    if (!plan.ok) return res.status(400).json({ success: false, error: plan.error });
+    res.json({ success: true, plan });
+  });
+  app.post('/api/tools/uninstall', (req, res) => {
+    try {
+      const { toolId, confirmCritical } = req.body || {};
+      const result = uninstallTool(String(toolId || ''), { confirmCritical: confirmCritical === true });
+      res.json({ success: true, result });
+    } catch (err) {
+      res.status(err.code === 'CRITICAL_CONFIRM_REQUIRED' ? 409 : 400).json({ success: false, error: err.message, code: err.code || null });
     }
   });
 

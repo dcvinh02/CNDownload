@@ -20,22 +20,92 @@ import sys
 import numpy as np
 
 CJK_RE = re.compile(r"[一-鿿]")
-BAND_TOP = 0.50      # dải phụ đề: từ 50% ...
-BAND_BOTTOM = 0.97   # ... đến 97% chiều cao khung hình
+LATIN_WORD_RE = re.compile(r"[A-Za-z]{2,}")
+EN_REC_FILE = "en_PP-OCRv4_rec_mobile.onnx"
+# Ngôn ngữ phụ đề cần đọc: "zh" (chữ Trung, mặc định) hoặc "en" (phụ đề tiếng Anh — model đọc tiếng Anh riêng, giữ dấu cách)
+SUB_LANG = {"value": "zh"}
+
+
+def set_sub_lang(lang):
+    SUB_LANG["value"] = "en" if str(lang or "").lower().startswith("en") else "zh"
+    return SUB_LANG["value"]
+
+
+def is_target_text(text):
+    """Dòng chữ có phải ngôn ngữ phụ đề đang đọc không."""
+    if SUB_LANG["value"] == "en":
+        return bool(LATIN_WORD_RE.search(text)) and not CJK_RE.search(text)
+    return bool(CJK_RE.search(text))
+
+
+def target_char_count(text):
+    if SUB_LANG["value"] == "en":
+        return len(re.findall(r"[A-Za-z]", text))
+    return len(CJK_RE.findall(text))
+
+
+def join_lines(parts):
+    return (" " if SUB_LANG["value"] == "en" else "").join(parts).strip()
 WORK_WIDTH = 960     # chiều rộng xử lý
+
+# Tham số người dùng chỉnh được trong app (⚙️ Tinh chỉnh OCR) — giá trị mặc định đã kiểm nghiệm trên video thật
+DEFAULT_PARAMS = {
+    "band_top": 0.50,         # vùng đọc phụ đề: từ ... (tỉ lệ chiều cao khung hình, 0 = mép trên)
+    "band_bottom": 0.97,      # ... đến
+    "center_tol": 0.28,       # dòng chữ phải nằm gần giữa: lệch tối đa 28% chiều rộng (bỏ biển hiệu, chữ ở cạnh)
+    "min_conf": 0.75,         # độ tin cậy tối thiểu để nhận là phụ đề (dòng đúng vị trí phụ đề được nới thêm 0,15)
+    "fps": 4.0,               # số khung đọc mỗi giây (nhiều hơn = mốc thời gian chính xác hơn nhưng chậm hơn)
+    "min_duration": 0.4,      # bỏ dòng chỉ hiện thoáng qua dưới ... giây
+    "static_max_ratio": 0.35, # bỏ chữ đứng yên quá ...% thời lượng video (logo, watermark, tiêu đề cố định)
+}
+PARAM_LIMITS = {
+    "band_top": (0.0, 0.95), "band_bottom": (0.05, 1.0), "center_tol": (0.05, 0.5), "min_conf": (0.5, 0.95),
+    "fps": (1.0, 10.0), "min_duration": (0.1, 2.0), "static_max_ratio": (0.1, 1.0),
+}
+PARAMS = dict(DEFAULT_PARAMS)
+
+
+def set_params(d):
+    """Áp dụng tham số (bỏ qua khóa lạ, kẹp vào khoảng hợp lệ). Trả về bộ tham số đang dùng."""
+    PARAMS.clear()
+    PARAMS.update(DEFAULT_PARAMS)
+    for k, v in (d or {}).items():
+        if k in PARAM_LIMITS:
+            try:
+                lo, hi = PARAM_LIMITS[k]
+                PARAMS[k] = min(hi, max(lo, float(v)))
+            except (TypeError, ValueError):
+                pass
+    if PARAMS["band_bottom"] - PARAMS["band_top"] < 0.05:
+        PARAMS["band_top"], PARAMS["band_bottom"] = DEFAULT_PARAMS["band_top"], DEFAULT_PARAMS["band_bottom"]
+    return dict(PARAMS)
 REC_H = 48
 
 
 class SubtitleOCR:
-    def __init__(self, models_dir):
+    def __init__(self, models_dir, lang="zh"):
         import onnxruntime as ort
 
         so = ort.SessionOptions()
         so.log_severity_level = 3
         self.det = ort.InferenceSession(os.path.join(models_dir, "ch_PP-OCRv4_det_infer.onnx"), so, providers=["CPUExecutionProvider"])
-        self.rec = ort.InferenceSession(os.path.join(models_dir, "ch_PP-OCRv4_rec_infer.onnx"), so, providers=["CPUExecutionProvider"])
-        chars = self.rec.get_modelmeta().custom_metadata_map.get("character", "").split("\n")
-        self.charset = ["<blank>"] + chars + [" "]
+        self.rec, self.charset = self._load_rec(ort, so, os.path.join(models_dir, "ch_PP-OCRv4_rec_infer.onnx"))
+        self.rec_en = None
+        if str(lang).startswith("en"):
+            en_path = os.path.join(models_dir, EN_REC_FILE)
+            if not os.path.exists(en_path):
+                raise RuntimeError("Chưa có model đọc phụ đề tiếng Anh — vào 🧰 Công cụ, cài lại \"Đọc phụ đề trong hình (OCR)\".")
+            self.rec_en, self.charset_en = self._load_rec(ort, so, en_path)
+
+    @staticmethod
+    def _load_rec(ort, so, path):
+        sess = ort.InferenceSession(path, so, providers=["CPUExecutionProvider"])
+        chars = [c for c in sess.get_modelmeta().custom_metadata_map.get("character", "").split("\n") if c != ""]
+        charset = ["<blank>"] + chars
+        n_cls = sess.get_outputs()[0].shape[-1]
+        while isinstance(n_cls, int) and len(charset) < n_cls:
+            charset.append(" ")  # PaddleOCR use_space_char: lớp cuối là dấu cách
+        return sess, charset
 
     # ---------- tìm dòng chữ ----------
     def detect_lines(self, img):
@@ -123,20 +193,32 @@ class SubtitleOCR:
         bot = c[y1][:, x0] * (1 - wx) + c[y1][:, x1] * wx
         return top * (1 - wy) + bot * wy
 
-    def recognize(self, img, box):
+    def recognize_line(self, img, box):
+        """Đọc 1 dòng: luôn đọc bằng model chữ Trung trước; chế độ tiếng Anh thì dòng không có chữ Trung được đọc lại
+        bằng model tiếng Anh (giữ đúng dấu cách giữa các từ)."""
+        text, conf = self.recognize(img, box)
+        if self.rec_en is not None and text and not CJK_RE.search(text):
+            t2, c2 = self.recognize(img, box, self.rec_en, self.charset_en)
+            if t2:
+                return re.sub(r"\s+", " ", t2).strip(), c2
+        return text, conf
+
+    def recognize(self, img, box, sess=None, charset=None):
+        sess = sess or self.rec
+        charset = charset or self.charset
         x0, y0, x1, y1, _ = box
         crop = img[y0:y1, x0:x1]
         if crop.size == 0:
             return "", 0.0
         r = self._resize_h(crop, REC_H)
         x = ((r / 255.0) - 0.5) / 0.5
-        out = self.rec.run(None, {"x": x.transpose(2, 0, 1)[None].astype(np.float32)})[0][0]
+        out = sess.run(None, {"x": x.transpose(2, 0, 1)[None].astype(np.float32)})[0][0]
         ids = out.argmax(axis=1)
         probs = out.max(axis=1)
         text, confs, last = [], [], -1
         for i, p in zip(ids, probs):
-            if i != last and i != 0 and i < len(self.charset):
-                text.append(self.charset[i])
+            if i != last and i != 0 and i < len(charset):
+                text.append(charset[i])
                 confs.append(float(p))
             last = i
         return "".join(text).strip(), (float(np.mean(confs)) if confs else 0.0)
@@ -158,8 +240,8 @@ def video_info(ffmpeg, video):
 
 def iter_band_frames(ffmpeg, video, w, h, fps, seek_list=None):
     """Sinh (thời điểm, khung BGR của dải phụ đề) — đọc thẳng từ FFmpeg, không cần OpenCV."""
-    y0 = int(h * BAND_TOP) // 2 * 2
-    bh = (int(h * BAND_BOTTOM) - y0) // 2 * 2
+    y0 = int(h * PARAMS["band_top"]) // 2 * 2
+    bh = max(32, (int(h * PARAMS["band_bottom"]) - y0) // 2 * 2)
     out_w = WORK_WIDTH if w >= WORK_WIDTH else (w // 2 * 2)
     out_h = max(32, int(round(bh * out_w / float(w))) // 2 * 2)
     vf = "crop={}:{}:0:{},scale={}:{}".format(w, bh, y0, out_w, out_h)
@@ -199,7 +281,7 @@ def read_frame_lines(ocr, img, cache):
         return cache["lines"]
     lines = []
     for b in ocr.detect_lines(img):
-        text, conf = ocr.recognize(img, b)
+        text, conf = ocr.recognize_line(img, b)
         if text:
             lines.append((text, conf, (b[1] + b[3]) / 2.0, (b[0] + b[2]) / 2.0, b[3] - b[1]))
     cache["small"], cache["lines"] = small, lines
@@ -237,7 +319,7 @@ def pick_subtitle_lines(frames, width):
     cands = []
     for t, lines in frames:
         for (text, conf, yc, xc, lh) in lines:
-            if conf >= 0.75 and CJK_RE.search(text) and abs(xc - width / 2.0) <= width * 0.28:
+            if conf >= PARAMS["min_conf"] and is_target_text(text) and abs(xc - width / 2.0) <= width * PARAMS["center_tol"]:
                 cands.append(yc)
     if not cands:
         return None, []
@@ -249,12 +331,13 @@ def pick_subtitle_lines(frames, width):
         keep = [
             l for l in lines
             # đã đúng vị trí phụ đề (giữa, đúng độ cao) → chấp nhận độ tin cậy thấp hơn một chút (chữ trên nền sáng)
-            if l[1] >= 0.6 and CJK_RE.search(l[0]) and abs(l[3] - width / 2.0) <= width * 0.28 and abs(l[2] - mode_y) <= max(24, l[4] * 1.6)
+            if l[1] >= PARAMS["min_conf"] - 0.15 and is_target_text(l[0]) and abs(l[3] - width / 2.0) <= width * PARAMS["center_tol"] and abs(l[2] - mode_y) <= max(24, l[4] * 1.6)
         ]
         keep.sort(key=lambda l: l[2])
-        text = "".join(l[0] for l in keep)
-        # dòng chỉ 1 chữ dễ đọc nhầm (嗯 → 咽) → cần độ tin cậy cao
-        if len(CJK_RE.findall(text)) == 1 and max([l[1] for l in keep] or [0]) < 0.85:
+        text = join_lines([l[0] for l in keep])
+        # dòng chỉ 1 chữ (嗯 → 咽) / tiếng Anh ≤ 2 chữ cái dễ đọc nhầm → cần độ tin cậy cao
+        n_ch = target_char_count(text)
+        if 0 < n_ch <= (2 if SUB_LANG["value"] == "en" else 1) and max([l[1] for l in keep] or [0]) < 0.85:
             keep, text = [], ""
         conf = float(np.mean([l[1] for l in keep])) if keep else 0.0
         per_frame.append((t, text, conf))
@@ -321,9 +404,9 @@ def build_events(per_frame, fps, duration):
     res = []
     for e in out:
         d = e["endSec"] - e["startSec"]
-        if d < 0.4:
+        if d < PARAMS["min_duration"]:
             continue
-        if duration > 0 and total.get(e["sourceText"], 0) > max(20.0, 0.35 * duration):
+        if duration > 0 and total.get(e["sourceText"], 0) > max(20.0, PARAMS["static_max_ratio"] * duration):
             continue
         res.append(e)
     for i, e in enumerate(res):
@@ -368,8 +451,47 @@ def extract(ocr, ffmpeg, video, fps=4, on_progress=None):
     width = WORK_WIDTH if w >= WORK_WIDTH else w
     mode_y, per_frame = pick_subtitle_lines(frames, width)
     if not per_frame:
-        return {"ok": False, "errorCode": "NO_SUBTITLES", "error": "Không tìm thấy phụ đề chữ Trung trong hình video."}
+        return {"ok": False, "errorCode": "NO_SUBTITLES", "error": "Không tìm thấy phụ đề " + ("tiếng Anh" if SUB_LANG["value"] == "en" else "chữ Trung") + " trong hình video."}
     segs = build_events(per_frame, fps, dur)
     if not segs:
-        return {"ok": False, "errorCode": "NO_SUBTITLES", "error": "Không tìm thấy phụ đề chữ Trung trong hình video."}
+        return {"ok": False, "errorCode": "NO_SUBTITLES", "error": "Không tìm thấy phụ đề " + ("tiếng Anh" if SUB_LANG["value"] == "en" else "chữ Trung") + " trong hình video."}
     return {"ok": True, "segments": segs, "totalDuration": round(dur, 2), "framesRead": len(frames), "subtitleY": mode_y}
+
+
+def analyze_frame(ocr, ffmpeg, video, t):
+    """Xem thử 1 khung hình với tham số hiện tại: các dòng chữ tìm thấy trong vùng đọc, dòng nào được nhận là
+    phụ đề / bị bỏ và lý do. Tọa độ trả về theo tỉ lệ khung hình gốc (0..1) để giao diện vẽ khung lên ảnh."""
+    dur, w, h = video_info(ffmpeg, video)
+    if dur <= 0 or w <= 0:
+        return {"ok": False, "error": "Không đọc được thông tin video."}
+    t = max(0.0, min(float(t), max(0.0, dur - 0.05)))
+    got = list(iter_band_frames(ffmpeg, video, w, h, 1, seek_list=[t]))
+    if not got:
+        return {"ok": False, "error": "Không lấy được khung hình tại thời điểm này."}
+    img = got[0][1]
+    out_w = img.shape[1]
+    k = w / float(out_w)
+    y0 = int(h * PARAMS["band_top"]) // 2 * 2
+    keep_conf = PARAMS["min_conf"] - 0.15
+    lines = []
+    for b in ocr.detect_lines(img):
+        text, conf = ocr.recognize_line(img, b)
+        if not text:
+            continue
+        x0, by0, x1, by1, _ = b
+        xc = (x0 + x1) / 2.0
+        reasons = []
+        if not is_target_text(text):
+            reasons.append("không phải chữ tiếng Anh" if SUB_LANG["value"] == "en" else "không có chữ Trung")
+        if conf < keep_conf:
+            reasons.append("độ tin cậy thấp (%.2f < %.2f)" % (conf, keep_conf))
+        if abs(xc - out_w / 2.0) > out_w * PARAMS["center_tol"]:
+            reasons.append("lệch xa giữa khung")
+        if 0 < target_char_count(text) <= (2 if SUB_LANG["value"] == "en" else 1) and conf < 0.85:
+            reasons.append("dòng quá ngắn cần độ tin cậy ≥ 0,85")
+        lines.append({
+            "text": text, "conf": round(conf, 2), "keep": not reasons, "reasons": reasons,
+            "x0": round(x0 * k / w, 4), "x1": round(x1 * k / w, 4),
+            "y0": round((y0 + by0 * k) / h, 4), "y1": round((y0 + by1 * k) / h, 4),
+        })
+    return {"ok": True, "t": round(t, 2), "duration": round(dur, 2), "width": w, "height": h, "params": dict(PARAMS), "lines": lines}

@@ -369,7 +369,7 @@ async function main() {
     mode = 'ok';
     const r = await translateSegmentsWithLLM(segsIn, { sourceLang: 'zh', targetLang: 'vi', providerId: 'gemini', useCache: false });
     assert(r.translations.join('|') === 'Bản dịch 1|Bản dịch 2|Bản dịch 3', r.translations.join('|'));
-    assert(lastBody.systemInstruction.parts[0].text.includes('Đóng vai là một phiên dịch viên chuyên nghiệp'), 'thiếu prompt');
+    assert(lastBody.systemInstruction.parts[0].text.includes('Đóng vai là một phiên dịch viên lồng tiếng phim chuyên nghiệp'), 'thiếu prompt');
     assert(lastBody.generationConfig.responseMimeType === 'application/json', 'không bật JSON mode');
     const sent = lastBody.contents[0].parts[0].text;
     assert(sent.includes('"id": 2') && sent.includes('"start": 2.4') && sent.includes('"speaker_id": "speaker_2"'), 'thiếu cấu trúc');
@@ -539,6 +539,24 @@ async function main() {
     ai.saveAiConfig({ providers: { openai_compatible: { baseUrl: '' } } });
     return `${r.mode}; usedCloud=${r.usedCloud}`;
   });
+  await check('AI đám mây (ChatGPT/Gemini) nhận CẢ KỊCH BẢN trong 1 request; AI Local vẫn chia lô 35 câu; prompt có văn phong + chỉ trả id/translated_text', async () => {
+    mode = 'ok';
+    const many = Array.from({ length: 80 }, (_, i) => ({ index: i + 1, id: i + 1, startSec: i * 2, endSec: i * 2 + 1.5, sourceText: `第${i + 1}句话`, speakerId: 'speaker_1' }));
+    userTexts.length = 0;
+    const cloud = await translateSegmentsWithLLM(many, { sourceLang: 'zh', targetLang: 'vi', style: 'comic', providerId: 'openai', useCache: false });
+    assert(cloud.stats.requests === 1 && cloud.translations.every((t) => t.startsWith('Bản dịch')), `cloud: ${cloud.stats.requests} request`);
+    const u = userTexts[0] || '';
+    assert(/HÀI HƯỚC \/ COMIC/.test(u) && /CHỈ gồm "id" và "translated_text"/.test(u), 'prompt thiếu văn phong comic / định dạng rút gọn');
+    ai.saveAiConfig({ providers: { openai_compatible: { baseUrl: `${base}/ollama`, defaultModel: '' } } });
+    try {
+      await ai.testProviderConnection('openai_compatible');
+      const local = await translateSegmentsWithLLM(many, { sourceLang: 'zh', targetLang: 'vi', providerId: 'openai_compatible', model: 'qwen2.5:7b', useCache: false });
+      assert(local.stats.requests === 3, `AI local: ${local.stats.requests} request (kỳ vọng 3 lô 35+35+10)`);
+      return `đám mây: 80 câu / 1 request (${cloud.mode}) • máy chủ local: ${local.stats.requests} lô`;
+    } finally {
+      ai.saveAiConfig({ providers: { openai_compatible: { baseUrl: '' } } });
+    }
+  });
   await check('Mã bộ dịch cũ cloud_gemini/cloud_openai được ánh xạ sang AI Provider mới', () => {
     assert(dub.normalizeTranslationProvider('cloud_gemini') === 'ai_gemini' && dub.normalizeTranslationProvider('cloud_openai') === 'ai_openai', 'sai ánh xạ');
     return 'ok';
@@ -602,8 +620,10 @@ async function main() {
     fs.writeFileSync(listFile, items.map((it) => `file '${it.output}'\nfile '${silence}'`).join('\n'));
     const dlg16 = path.join(TMP, 'dialog16k.wav');
     ff(['-f', 'concat', '-safe', '0', '-i', listFile, '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', dlg16]);
-    const asrDir = ['faster-whisper-small', 'faster-whisper-base', 'faster-whisper-tiny'].map((d) => path.join(ROOT, 'bin', 'models', 'asr', d)).find((d) => fs.existsSync(path.join(d, 'model.bin')));
-    const r = spawnSync(PY_CORE, [path.join(ROOT, 'src', 'local_ai_worker.py'), 'transcribe_and_translate', '--audio', dlg16, '--asr-dir', asrDir, '--argos-dir', path.join(ROOT, 'bin', 'models', 'argos'), '--target-lang', 'vi', '--skip-translation', '1', '--diarize', '1', '--diar-dir', diarDir], { encoding: 'utf8', timeout: 300000 });
+    const asrDir = ['faster-whisper-small', 'faster-whisper-base', 'faster-whisper-tiny'].map((d) => path.join(ROOT, 'bin', 'models', 'asr', d)).find((d) => fs.existsSync(path.join(d, 'model.bin'))) || '';
+    const svDir = require('../src/tool_installer').isSenseVoiceInstalled() ? require('../src/tool_installer').SENSEVOICE_DIR : '';
+    if (!asrDir && !svDir) throw skip('Chưa cài mô hình nhận dạng giọng nói.', true);
+    const r = spawnSync(PY_CORE, [path.join(ROOT, 'src', 'local_ai_worker.py'), 'transcribe_and_translate', '--audio', dlg16, '--asr-dir', asrDir, '--sv-dir', svDir, '--argos-dir', path.join(ROOT, 'bin', 'models', 'argos'), '--target-lang', 'vi', '--skip-translation', '1', '--diarize', '1', '--diar-dir', diarDir], { encoding: 'utf8', timeout: 300000 });
     const line = r.stdout.split('\n').reverse().find((l) => l.startsWith('WORKER_JSON:'));
     const res = JSON.parse(line.slice('WORKER_JSON:'.length));
     assert(res.ok, res.error);
@@ -968,6 +988,123 @@ async function main() {
     return `${t.result.segments.length} câu từ OCR, dịch xong trong ${t.elapsedSec}s: "${t.result.segments[0].translatedText}"`;
   });
 
+  await check('OCR phụ đề song ngữ: chọn "tiếng Anh" đọc đúng dòng tiếng Anh (giữ dấu cách), chọn "chữ Trung" đọc dòng tiếng Trung', async () => {
+    ocrPrereq();
+    if (!tools.isOcrEnInstalled()) throw skip('Chưa có model OCR tiếng Anh (cài lại thành phần OCR).', true);
+    const BI = [
+      ['老板拿双肉色的丝袜', 'A pair of nude stockings please', 0.5, 3.0],
+      ['我要帽子你拿个手套做啥子', 'Why are you giving me a glove', 4.0, 6.5],
+      ['还真一点光都不漏', 'It really blocks out every bit of light', 8.0, 10.5],
+      ['终于碰到一个懂我的', 'I finally met someone who understands me', 12.0, 14.5]
+    ];
+    const biVideo = path.join(ocrDir, 'song_ngu.mp4');
+    BI.forEach(([zh, en], i) => {
+      fs.writeFileSync(path.join(ocrDir, `bz${i}.txt`), zh, 'utf8');
+      fs.writeFileSync(path.join(ocrDir, `be${i}.txt`), en, 'utf8');
+    });
+    const vf = BI.flatMap(([, , a, b], i) => [
+      `drawtext=fontfile=font.ttc:textfile=bz${i}.txt:fontsize=40:fontcolor=white:borderw=3:bordercolor=black:x=(w-tw)/2:y=h*0.78:enable='between(t,${a},${b})'`,
+      `drawtext=fontfile=font.ttc:textfile=be${i}.txt:fontsize=30:fontcolor=white:borderw=2:bordercolor=black:x=(w-tw)/2:y=h*0.86:enable='between(t,${a},${b})'`
+    ]).join(',');
+    const mk = spawnSync(FFMPEG, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=0x336655:s=1280x720:d=16:r=25', '-vf', vf, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', path.basename(biVideo)], { cwd: ocrDir, encoding: 'utf8' });
+    assert(mk.status === 0, `không dựng được video song ngữ: ${String(mk.stderr).slice(-300)}`);
+    const run = (lang) => {
+      const r = spawnSync(PY_CORE, [path.join(ROOT, 'src', 'local_ai_worker.py'), 'ocr_subtitles', '--video', biVideo, '--models', tools.OCR_MODELS_DIR, '--ffmpeg', FFMPEG, '--mode', 'extract', '--sub-lang', lang], { encoding: 'utf8', env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, timeout: 300000 });
+      const line = String(r.stdout || '').split(/\r?\n/).reverse().find((l) => l.startsWith('WORKER_JSON:'));
+      return JSON.parse(line.slice('WORKER_JSON:'.length));
+    };
+    const en = run('en');
+    const zh = run('zh');
+    const norm = (t) => t.toLowerCase().replace(/[^a-z ]/g, '').replace(/\s+/g, ' ').trim();
+    assert(en.ok && en.segments.length === BI.length, `tiếng Anh: ${JSON.stringify(en.segments || en.error)}`);
+    en.segments.forEach((sg, i) => assert(norm(sg.sourceText) === norm(BI[i][1]), `câu ${i + 1}: "${sg.sourceText}" ≠ "${BI[i][1]}"`));
+    assert(zh.ok && zh.segments.map((x) => x.sourceText).join('|') === BI.map((x) => x[0]).join('|'), `chữ Trung: ${JSON.stringify(zh.segments)}`);
+    return `EN: ${en.segments.map((x) => x.sourceText).join(' | ')} • ZH: ${zh.segments.length} câu đúng`;
+  });
+  await check('Tinh chỉnh OCR: thu hẹp vùng đọc (50–70%) thì không còn thấy phụ đề ở đáy; tham số mặc định thì nhận đúng, bỏ logo góc', async () => {
+    ocrPrereq();
+    const frame = (params) => {
+      const r = spawnSync(PY_CORE, [path.join(ROOT, 'src', 'local_ai_worker.py'), 'ocr_subtitles', '--video', ocrVideo, '--models', tools.OCR_MODELS_DIR, '--ffmpeg', FFMPEG, '--mode', 'frame', '--at', '5.0', '--params', JSON.stringify(params)], { encoding: 'utf8', env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, timeout: 120000 });
+      const line = String(r.stdout || '').split(/\r?\n/).reverse().find((l) => l.startsWith('WORKER_JSON:'));
+      return JSON.parse(line.slice('WORKER_JSON:'.length));
+    };
+    const def = frame({});
+    const narrow = frame({ band_top: 0.5, band_bottom: 0.7 });
+    const kept = def.lines.filter((l) => l.keep).map((l) => l.text);
+    assert(kept.length === 1 && kept[0] === OCR_LINES[1][0], `mặc định: ${JSON.stringify(def.lines)}`);
+    assert(def.lines.some((l) => !l.keep && /抖音/.test(l.text) && l.reasons.some((x) => /lệch xa giữa/.test(x))), 'logo góc phải bị bỏ kèm lý do');
+    assert(!narrow.lines.some((l) => l.keep), `vùng hẹp vẫn nhận: ${JSON.stringify(narrow.lines)}`);
+    const o = require('../src/ocr_settings');
+    const saved = o.saveOcrSettings({ fps: 99, band_top: 0.6, khong_hop_le: 1 });
+    assert(saved.fps === 10 && saved.band_top === 0.6 && !('khong_hop_le' in saved), JSON.stringify(saved));
+    o.resetOcrSettings();
+    return `mặc định nhận "${kept[0]}", bỏ logo • vùng 50–70%: ${narrow.lines.length} dòng, 0 nhận • fps 99 → ${saved.fps}`;
+  });
+  await check('Xóa công cụ/model: xóa đúng thư mục OCR rồi trạng thái "chưa cài"; công cụ bắt buộc (yt-dlp) có cảnh báo và phải xác nhận', async () => {
+    const plan = tools.getUninstallPlan('ytdlp');
+    assert(plan.ok && plan.critical && /KHÔNG KHUYẾN NGHỊ XÓA/.test(plan.warnings[0]), JSON.stringify(plan));
+    let refused = false;
+    try {
+      tools.uninstallTool('ytdlp');
+    } catch (e) {
+      refused = e.code === 'CRITICAL_CONFIRM_REQUIRED';
+    }
+    assert(refused, 'xóa yt-dlp không xác nhận phải bị từ chối');
+    if (!tools.isOcrInstalled()) throw skip('Chưa cài OCR để thử xóa.', true);
+    // Sao lưu mô hình OCR trước khi xóa thật, khôi phục ngay sau đó (không mất dữ liệu người dùng)
+    const backup = path.join(TMP, 'ocr_backup');
+    fs.cpSync(tools.OCR_MODELS_DIR, backup, { recursive: true });
+    const guide = require('../src/component_guide');
+    const choicesBefore = fs.existsSync(guide.CHOICES_FILE) ? fs.readFileSync(guide.CHOICES_FILE) : null;
+    try {
+      const p2 = tools.getUninstallPlan('subtitleOcr');
+      assert(p2.ok && p2.paths.length === 1 && path.resolve(p2.paths[0]) === path.resolve(tools.OCR_MODELS_DIR), JSON.stringify(p2));
+      const r = tools.uninstallTool('subtitleOcr');
+      assert(!fs.existsSync(tools.OCR_MODELS_DIR) && !tools.isOcrInstalled() && r.freedBytes > 15e6, `freed ${r.freedBytes}`);
+      return `yt-dlp: cảnh báo + cần xác nhận • OCR: xóa ${(r.freedBytes / 1e6).toFixed(1)} MB, trạng thái chưa cài (đã khôi phục)`;
+    } finally {
+      fs.cpSync(backup, tools.OCR_MODELS_DIR, { recursive: true });
+      if (choicesBefore) fs.writeFileSync(guide.CHOICES_FILE, choicesBefore);
+      else fs.rmSync(guide.CHOICES_FILE, { force: true });
+    }
+  });
+
+  await check('SenseVoice: nhận cả giọng Quảng Đông lẫn Phổ thông trong cùng video (không ép về Phổ thông), không mất chữ đầu câu; nhận ra tiếng Anh', async () => {
+    const ti = require('../src/tool_installer');
+    if (!ti.isSenseVoiceInstalled()) throw skip('Chưa cài SenseVoiceSmall.', true);
+    if (process.platform !== 'darwin') throw skip('Cần giọng đọc Quảng Đông "Sinji" của macOS để tạo âm thanh thử.');
+    const dir = path.join(TMP, 'sv_mix');
+    fs.mkdirSync(dir, { recursive: true });
+    const sayWav = (voice, text, name) => {
+      const aiff = path.join(dir, `${name}.aiff`);
+      const r = spawnSync('say', ['-v', voice, '-o', aiff, text]);
+      if (r.status !== 0) throw skip(`Không có giọng ${voice} trên máy.`);
+      ff(['-i', aiff, '-ar', '16000', '-ac', '1', path.join(dir, `${name}.wav`)]);
+    };
+    sayWav('Sinji', '你今日食咗飯未呀？', 'y1');
+    sayWav('Sinji', '我哋聽日一齊去飲茶，好唔好？', 'y2');
+    sayWav('Tingting', '老板，给我拿一双黑色的袜子。', 'm1');
+    sayWav('Samantha', 'Hey guys, welcome back to my channel. Today we are going to test a new phone.', 'e1');
+    ff(['-f', 'lavfi', '-i', 'anullsrc=r=16000:cl=mono', '-t', '1.2', path.join(dir, 'sil.wav')]);
+    fs.writeFileSync(path.join(dir, 'l.txt'), ['y1', 'sil', 'm1', 'sil', 'y2'].map((n) => `file '${path.join(dir, n + '.wav')}'`).join('\n'));
+    ff(['-f', 'concat', '-safe', '0', '-i', path.join(dir, 'l.txt'), '-c:a', 'pcm_s16le', path.join(dir, 'mix.wav')]);
+    const run = (wav) => {
+      const r = spawnSync(PY_CORE, [path.join(ROOT, 'src', 'local_ai_worker.py'), 'transcribe_and_translate', '--audio', wav, '--sv-dir', ti.SENSEVOICE_DIR, '--argos-dir', path.join(ROOT, 'bin', 'models', 'argos'), '--skip-translation', '1', '--input-lang', 'auto'], { encoding: 'utf8', env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, timeout: 180000 });
+      const line = String(r.stdout || '').split(/\r?\n/).reverse().find((l) => l.startsWith('WORKER_JSON:'));
+      if (!line) throw new Error(String(r.stderr || '').slice(-300));
+      return JSON.parse(line.slice('WORKER_JSON:'.length));
+    };
+    const mix = run(path.join(dir, 'mix.wav'));
+    const txt = mix.segments.map((x) => x.sourceText).join(' | ');
+    assert(mix.ok && /SenseVoice/.test(mix.asrModelUsed), mix.error || mix.asrModelUsed);
+    assert(/食咗/.test(txt) && /我哋/.test(txt) && /唔好/.test(txt), `giọng Quảng Đông bị ép sai: ${txt}`);
+    assert(/老板/.test(txt) && /黑色的袜子/.test(txt), `câu Phổ thông sai/mất chữ đầu: ${txt}`);
+    assert(mix.sourceDialect === 'yue', `phải báo có giọng Quảng Đông: ${mix.sourceDialect}`);
+    const en = run(path.join(dir, 'e1.wav'));
+    assert(en.ok && en.detectedSourceLang === 'en' && /WELCOME BACK TO MY CHANNEL/i.test(en.segments.map((x) => x.sourceText).join(' ')), JSON.stringify(en).slice(0, 300));
+    return `trộn giọng: ${txt} • tiếng Anh: nhận là "en"`;
+  });
+
   /* ---------------- 4b0. Qwen dùng chung (Windows: %USERPROFILE%\QwenLocal) ---------------- */
   console.log('\n--- [4b0] Qwen dùng chung cho mọi ứng dụng ---');
   await check('Chuyển bản Qwen cũ sang thư mục dùng chung an toàn (đổi chỗ cùng ổ; khác ổ: sao chép → kiểm → mới xóa bản cũ)', async () => {
@@ -1315,16 +1452,24 @@ async function main() {
     }
     throw new Error('quá thời gian');
   };
-  await check('Ngôn ngữ đầu vào: tiếng Trung giữ nguyên kết quả (Tự động = ép Tiếng Trung), không dùng module tiếng Anh', async () => {
+  await check('Ngôn ngữ đầu vào: Tự động (nhận giọng từng đoạn) cho cùng số câu & mốc thời gian (lệch ≤ 50 ms) như ép Phổ thông, chữ giống ≥ 95%, không dùng module tiếng Anh', async () => {
     if (!fs.existsSync(syncVideo)) throw skip('Không tạo được video thử tiếng Trung.', true);
     // targetLang 'zh' = cùng ngôn ngữ nguồn → không cần bộ dịch, chỉ so kết quả nhận dạng & chia câu
     const a = await runExtract({ videoPath: syncVideo, targetLang: 'zh', inputLang: 'auto' });
     const b = await runExtract({ videoPath: syncVideo, targetLang: 'zh', inputLang: 'zh' });
     assert(a.status === 'completed' && b.status === 'completed', `${a.status}/${b.status} ${(a.errors || []).concat(b.errors || []).join(' ')}`);
-    const key = (t) => JSON.stringify(t.result.segments.map((x) => [x.startSec, x.endSec, x.sourceText]));
+    const times = (t) => t.result.segments.map((x) => [x.startSec, x.endSec]);
+    const text = (t) => t.result.segments.map((x) => x.sourceText).join('');
     assert(a.result.detectedSourceLang === 'zh' && !a.result.englishModule && !b.result.englishModule, 'tiếng Trung không được dùng module tiếng Anh');
-    assert(key(a) === key(b), `Tự động khác ép Tiếng Trung:\n${key(a)}\n${key(b)}`);
-    return `${a.result.segments.length} đoạn, Tự động = Tiếng Trung (giống hệt)`;
+    const ta0 = times(a);
+    const tb0 = times(b);
+    const sameTimes = ta0.length === tb0.length && ta0.every((x, i) => Math.abs(x[0] - tb0[i][0]) <= 0.05 && Math.abs(x[1] - tb0[i][1]) <= 0.05);
+    assert(sameTimes, `mốc thời gian lệch > 50 ms:\n${JSON.stringify(ta0)}\n${JSON.stringify(tb0)}`);
+    const ta = text(a);
+    const tb = text(b);
+    const same = Array.from(ta).filter((ch, i) => ch === tb[i]).length / Math.max(ta.length, tb.length);
+    assert(same >= 0.95, `chữ giống ${(same * 100).toFixed(1)}%:\n${ta}\n${tb}`);
+    return `${a.result.segments.length} đoạn, mốc thời gian lệch ≤ 50 ms, chữ giống ${(same * 100).toFixed(1)}%`;
   });
   await check('Module tiếng Anh: câu ngắt ở dấu phẩy không bị chia vụn, viết tắt "Mr."/"3.5" không bị tách, 3 câu cách nhau 1–1,5 s vẫn riêng & đúng thời điểm', async () => {
     const enDir = path.join(TMP, 'en');

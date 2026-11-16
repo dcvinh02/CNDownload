@@ -74,3 +74,6 @@ CNVideoScraperPro.exe.new
 bin/windows_app/
 config/*.backup-*.json
 config/thumbs/
+
+# Tham số OCR người dùng tự chỉnh
+config/ocr_settings.json

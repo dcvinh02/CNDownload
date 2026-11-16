@@ -1634,3 +1634,13 @@ body {
   padding-top: 4px;
   border-top: 1px dashed #e2e8f0;
 }
+
+/* Gợi ý nút cần nhấn tiếp theo (vd. sau khi chọn video nguồn) */
+.pulse-hint { animation: pulseHint 0.8s ease-in-out 3; box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.35); }
+@keyframes pulseHint { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.04); } }
+
+/* Tab Tinh chỉnh OCR */
+.ocr-params { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; margin-top: 8px; }
+.ocr-param { border: 1px solid var(--border, #e2e8f0); border-radius: 8px; padding: 8px 10px; }
+.ocr-param-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12.5px; }
+.ocr-param-help { font-size: 11.5px; color: #64748b; margin-top: 2px; }

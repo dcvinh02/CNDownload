@@ -41,6 +41,13 @@ const DIARIZATION_DIR = path.join(MODELS_ROOT, 'diarization');
 const SEPARATION_MODEL_DIR = path.join(MODELS_ROOT, 'separation', 'sherpa-onnx-spleeter-2stems-fp16');
 
 const OCR_MODELS_DIR = path.join(MODELS_ROOT, 'ocr');
+function isOcrEnReady() {
+  try {
+    return fs.statSync(path.join(OCR_MODELS_DIR, 'en_PP-OCRv4_rec_mobile.onnx')).size > 5e6;
+  } catch (_) {
+    return false;
+  }
+}
 function isOcrModelsReady() {
   return ['ch_PP-OCRv4_det_infer.onnx', 'ch_PP-OCRv4_rec_infer.onnx'].every((f) => {
     try {
@@ -52,21 +59,6 @@ function isOcrModelsReady() {
 }
 
 /** Tên video (từ file .metadata.json lúc tải, hoặc tên file) — làm ngữ cảnh cho Whisper ở chế độ phương ngữ. */
-function videoContextTitle(videoPath) {
-  try {
-    const meta = JSON.parse(fs.readFileSync(String(videoPath).replace(/\.[^.\\/]+$/, '.metadata.json'), 'utf8'));
-    const t = (meta.data && meta.data.title) || meta.title;
-    if (t) return String(t).replace(/#\S+/g, '').trim().slice(0, 80);
-  } catch (_) {}
-  return path
-    .basename(String(videoPath))
-    .replace(/\.[^.]+$/, '')
-    .replace(/^[a-z]+_[0-9A-Za-z=]{6,}_/, '')
-    .replace(/_\d{5}$/, '')
-    .replace(/#\S+/g, '')
-    .trim()
-    .slice(0, 80);
-}
 
 function isSeparationAvailable() {
   return (
@@ -150,9 +142,25 @@ function isDiarizationAvailable() {
  */
 const LOCAL_MODELS_CATALOG = [
   {
+    id: 'sensevoice-small',
+    category: 'ASR (Nhận dạng giọng nói)',
+    name: 'SenseVoiceSmall (FunAudioLLM, ONNX INT8) — Đề xuất',
+    language: 'Phổ thông, Quảng Đông, tiếng địa phương, Anh, Nhật, Hàn (tự nhận từng đoạn nói)',
+    supportedLanguages: ['zh', 'yue', 'en', 'ja', 'ko'],
+    quality: 'Đo trên video tiếng Tứ Xuyên có nhạc nền (134 câu chuẩn): 85,0% chữ đúng (Whisper small 60,0%); 9 phút âm thanh trong ~8 giây trên M2 Pro',
+    modelSizeMB: 238,
+    sizeMB: 238,
+    license: 'FunASR Model License (SenseVoice) / MIT (Silero VAD)',
+    hardwareReq: 'CPU >= 2 nhân, RAM trống >= 1 GB (Chạy 100% Offline)',
+    ramRequired: 'CPU >= 2 nhân, RAM trống >= 1 GB (Chạy 100% Offline)',
+    cpuGpuNote: 'ONNX Runtime CPU int8 (sherpa-onnx)',
+    relPath: path.join('asr', 'sensevoice-small-int8', 'model.int8.onnx'),
+    isDefault: true
+  },
+  {
     id: 'faster-whisper-small',
     category: 'ASR (Nhận dạng giọng nói)',
-    name: 'Faster-Whisper Small (CTranslate2 INT8) — Đề xuất',
+    name: 'Faster-Whisper Small (CTranslate2 INT8) — dự phòng / tiếng Anh',
     language: 'Đa ngôn ngữ (99 ngôn ngữ: Trung, Việt, Anh, Nhật, Hàn...)',
     supportedLanguages: ['zh', 'vi', 'en', 'ja', 'ko'],
     quality: 'Chính xác hơn rõ rệt với tiếng Trung (đo trên video thử: đúng thuật ngữ, thành ngữ); ~0.13x thời gian thực trên M2 Pro',
@@ -163,7 +171,7 @@ const LOCAL_MODELS_CATALOG = [
     ramRequired: 'CPU >= 4 nhân, RAM trống >= 1.2 GB (Chạy 100% Offline)',
     cpuGpuNote: 'Tối ưu CPU int8',
     relPath: path.join('asr', 'faster-whisper-small', 'model.bin'),
-    isDefault: true
+    isDefault: false
   },
   {
     id: 'speaker-diarization',
@@ -681,8 +689,12 @@ const TRANSLATION_PROVIDERS_CATALOG = [
 ];
 
 const TRANSLATION_STYLES = [
-  { id: 'natural', name: 'Khẩu ngữ tự nhiên (Mặc định)' },
-  { id: 'review', name: 'Review / Chuyên nghiệp' },
+  { id: 'natural', name: 'Tự nhiên — đời thường (Mặc định)' },
+  { id: 'comic', name: 'Hài hước / Comic' },
+  { id: 'serious', name: 'Nghiêm túc — tin tức, tài liệu' },
+  { id: 'ancient', name: 'Cổ trang / Kiếm hiệp' },
+  { id: 'youth', name: 'Trẻ trung — vlog, TikTok' },
+  { id: 'review', name: 'Review / Giới thiệu sản phẩm' },
   { id: 'story', name: 'Kể chuyện / Thuyết minh' }
 ];
 
@@ -810,6 +822,11 @@ function getFfprobeBin() {
 
 function hasLocalPythonWorker() {
   return fs.existsSync(VENV_PYTHON) && fs.existsSync(LOCAL_AI_WORKER);
+}
+
+const SENSEVOICE_DIR = path.join(ASR_MODELS_DIR, 'sensevoice-small-int8');
+function isSenseVoiceReady() {
+  return ['model.int8.onnx', 'tokens.txt', 'silero_vad.onnx'].every((f) => fs.existsSync(path.join(SENSEVOICE_DIR, f)));
 }
 
 function getPreferredAsrModelDir() {
@@ -1215,6 +1232,8 @@ async function translateSegmentList(segments, sourceLang, targetLang, options = 
         sourceLang,
         targetLang,
         style: String(options.translationStyle || 'natural').toLowerCase(),
+        sourceDialect: options.sourceDialect || '',
+        sourceOrigin: options.sourceOrigin || '',
         providerId,
         model: options.aiModel || undefined,
         signal: options.signal,
@@ -2180,34 +2199,49 @@ async function extractAndPrepareSegments(videoPathOrOpts, targetLang = 'vi', cus
   const extractedWavPath = path.join(workDir, 'extracted_audio_16k.wav');
   const wantDiarize = options.autoDiarize === true && isDiarizationAvailable();
   // Ngôn ngữ đầu vào: auto (tự nhận diện) | zh (tiếng Trung) | en (tiếng Anh — module riêng)
-  const inputLang = ['zh', 'zh_d', 'en'].includes(String(options.inputLang || '').toLowerCase()) ? String(options.inputLang).toLowerCase() : 'auto';
+  // zh_d (phương ngữ — gợi ý cho Whisper cũ) nay là "Tự động": SenseVoice tự nhận giọng từng đoạn
+  const inputLang = ['zh', 'yue', 'en'].includes(String(options.inputLang || '').toLowerCase()) ? String(options.inputLang).toLowerCase() : 'auto';
   if (options.autoDiarize === true && !wantDiarize) log('warn', 'Đã bật nhận diện người nói nhưng máy chưa cài mô hình phân tách người nói — bỏ qua bước này.');
 
   try {
     let asr = ckpt && ckpt.asr ? ckpt.asr : null;
-    // Nguồn lời thoại: 'auto' (có phụ đề chữ Trung in sẵn → OCR, không có → nghe) | 'ocr' | 'asr'
-    const transcriptSource = ['ocr', 'asr'].includes(String(options.transcriptSource || '')) ? String(options.transcriptSource) : 'auto';
-    if (!asr && transcriptSource !== 'asr' && inputLang !== 'en') {
+    // Nguồn lời thoại: 'auto' (có phụ đề in sẵn → OCR, không có → nghe) | 'ocr' (phụ đề chữ Trung) | 'ocr_en' (phụ đề tiếng Anh) | 'asr'
+    const transcriptSource = ['ocr', 'ocr_en', 'asr'].includes(String(options.transcriptSource || '')) ? String(options.transcriptSource) : 'auto';
+    if (!asr && transcriptSource !== 'asr') {
       const ocrReady = isOcrModelsReady();
+      const enReady = ocrReady && isOcrEnReady();
       if (transcriptSource === 'ocr' && !ocrReady) {
-        throw new Error('Chưa cài "Đọc phụ đề trong hình (OCR)". Mở 🧩 Thành phần để cài (~16 MB) hoặc chọn nguồn "Nghe giọng nói".');
+        throw new Error('Chưa cài "Đọc phụ đề trong hình (OCR)". Mở 🧰 Công cụ để cài (~23 MB) hoặc chọn nguồn "Nghe giọng nói".');
       }
-      let useOcr = transcriptSource === 'ocr';
-      if (!useOcr && ocrReady) {
-        onStepChange(2, 'Đang kiểm tra video có phụ đề chữ Trung in sẵn không (OCR nhanh 24 khung hình)...');
-        const pr = await runLocalAiWorker(['ocr_subtitles', '--video', videoPath, '--models', OCR_MODELS_DIR, '--ffmpeg', getFfmpegBin(), '--mode', 'probe', '--samples', '24'], trackProc, 180000);
-        if (pr && pr.ok) {
-          useOcr = Boolean(pr.hasSubtitles);
-          log(useOcr ? 'ok' : 'info', `Kiểm tra phụ đề trong hình: ${Math.round((pr.ratio || 0) * 100)}% khung có chữ Trung ở vùng phụ đề, ${pr.distinct || 0} câu khác nhau → ${useOcr ? 'DÙNG OCR (đọc phụ đề)' : 'không có phụ đề → nghe giọng nói'}.`);
-        } else {
-          log('warn', `Không kiểm tra được phụ đề trong hình (${(pr && pr.error) || 'lỗi'}) → nghe giọng nói.`);
+      if (transcriptSource === 'ocr_en' && !enReady) {
+        throw new Error('Chưa có model đọc phụ đề tiếng Anh — vào 🧰 Công cụ, bấm "Tải & Cài lại" mục "Đọc phụ đề trong hình (OCR)" (thêm ~7,6 MB).');
+      }
+      const ocrParams = JSON.stringify(require('./ocr_settings').loadOcrSettings());
+      const LANG_LABEL = { zh: 'chữ Trung', en: 'tiếng Anh' };
+      let subLang = transcriptSource === 'ocr' ? 'zh' : transcriptSource === 'ocr_en' ? 'en' : null;
+      if (!subLang && ocrReady) {
+        // Tự động: thử phụ đề chữ Trung trước, không có thì thử phụ đề tiếng Anh. Video tiếng Anh: chỉ thử phụ đề tiếng Anh.
+        const order = (inputLang === 'en' ? ['en'] : ['zh', 'en']).filter((lg) => lg === 'zh' || enReady);
+        for (const lg of order) {
+          onStepChange(2, `Đang kiểm tra video có phụ đề ${LANG_LABEL[lg]} in sẵn không (OCR nhanh 24 khung hình)...`);
+          const pr = await runLocalAiWorker(['ocr_subtitles', '--video', videoPath, '--models', OCR_MODELS_DIR, '--ffmpeg', getFfmpegBin(), '--mode', 'probe', '--samples', '24', '--params', ocrParams, '--sub-lang', lg], trackProc, 180000);
+          if (pr && pr.ok) {
+            log(pr.hasSubtitles ? 'ok' : 'info', `Kiểm tra phụ đề ${LANG_LABEL[lg]}: ${Math.round((pr.ratio || 0) * 100)}% khung có chữ ở vùng phụ đề, ${pr.distinct || 0} câu khác nhau → ${pr.hasSubtitles ? 'DÙNG OCR (đọc phụ đề)' : 'không có'}.`);
+            if (pr.hasSubtitles) {
+              subLang = lg;
+              break;
+            }
+          } else {
+            log('warn', `Không kiểm tra được phụ đề ${LANG_LABEL[lg]} (${(pr && pr.error) || 'lỗi'}).`);
+          }
         }
+        if (!subLang) log('info', 'Không có phụ đề in sẵn → nghe giọng nói.');
       }
-      if (useOcr) {
-        onStepChange(2, 'Bước 2/5: Đang đọc phụ đề chữ Trung trong hình (OCR PP-OCRv4)...');
-        log('info', 'Bước 2: đọc phụ đề trong hình bằng OCR (chỉ vùng phụ đề, bỏ chữ đứng yên/logo).');
+      if (subLang) {
+        onStepChange(2, `Bước 2/5: Đang đọc phụ đề ${LANG_LABEL[subLang]} trong hình (OCR PP-OCRv4)...`);
+        log('info', `Bước 2: đọc phụ đề ${LANG_LABEL[subLang]} trong hình bằng OCR (chỉ vùng phụ đề, bỏ chữ đứng yên/logo).`);
         const ocrRes = await runLocalAiWorker(
-          ['ocr_subtitles', '--video', videoPath, '--models', OCR_MODELS_DIR, '--ffmpeg', getFfmpegBin(), '--mode', 'extract', '--fps', '4'],
+          ['ocr_subtitles', '--video', videoPath, '--models', OCR_MODELS_DIR, '--ffmpeg', getFfmpegBin(), '--mode', 'extract', '--params', ocrParams, '--sub-lang', subLang],
           trackProc,
           Math.max(300000, Math.round(mediaInfo.duration * 2000) + 120000),
           null,
@@ -2218,19 +2252,19 @@ async function extractAndPrepareSegments(videoPathOrOpts, targetLang = 'vi', cus
         const ocrSegs = ocrRes && ocrRes.ok ? sanitizeSegments(ocrRes.segments).map((x) => ({ ...x, translatedText: '' })) : [];
         if (ocrSegs.length >= 3) {
           asr = {
-            detectedSourceLang: 'zh',
+            detectedSourceLang: subLang,
             languageProbability: 1,
-            sourceLangName: LANGUAGE_INFO.zh.name,
-            asrModelUsed: 'OCR phụ đề trong hình (PaddleOCR PP-OCRv4)',
+            sourceLangName: (LANGUAGE_INFO[subLang] || LANGUAGE_INFO.zh).name,
+            asrModelUsed: `OCR phụ đề ${LANG_LABEL[subLang]} trong hình (PaddleOCR PP-OCRv4${subLang === 'en' ? ' en' : ''})`,
             speakerCount: 1,
             diarization: { ok: false, skipped: true },
             transcriptSource: 'ocr',
             segments: ocrSegs
           };
           if (ckpt) ckpt.asr = asr;
-          log('ok', `Bước 2: OCR đọc được ${ocrSegs.length} câu phụ đề (${ocrRes.framesRead} khung hình).`);
-        } else if (transcriptSource === 'ocr') {
-          throw new Error((ocrRes && ocrRes.error) || 'OCR không đọc được phụ đề chữ Trung trong video này. Hãy chọn nguồn "Nghe giọng nói".');
+          log('ok', `Bước 2: OCR đọc được ${ocrSegs.length} câu phụ đề ${LANG_LABEL[subLang]} (${ocrRes.framesRead} khung hình).`);
+        } else if (transcriptSource === 'ocr' || transcriptSource === 'ocr_en') {
+          throw new Error((ocrRes && ocrRes.error) || `OCR không đọc được phụ đề ${LANG_LABEL[subLang]} trong video này. Hãy chọn nguồn "Nghe giọng nói".`);
         } else {
           log('warn', `OCR chỉ đọc được ${ocrSegs.length} câu → chuyển sang nghe giọng nói.`);
         }
@@ -2253,12 +2287,11 @@ async function extractAndPrepareSegments(videoPathOrOpts, targetLang = 'vi', cus
         log('ok', `Bước 1: đã tách âm thanh (${(fs.statSync(extractedWavPath).size / 1048576).toFixed(1)} MB).`);
       }
 
-      onStepChange(2, 'Bước 2/5: Đang chạy nhận dạng giọng nói (ASR Faster-Whisper) để tách câu thoại và mốc thời gian...');
-      const asrModelDir = getPreferredAsrModelDir();
-      if (!asrModelDir) {
-        throw new Error(
-          'Chưa cài đặt mô hình nhận dạng giọng nói Local ASR (Faster-Whisper). Vui lòng mở mục Công cụ để tải mô hình.'
-        );
+      onStepChange(2, 'Bước 2/5: Đang nhận dạng giọng nói (SenseVoiceSmall) để tách câu thoại và mốc thời gian...');
+      const asrModelDir = getPreferredAsrModelDir() || '';
+      const svDir = isSenseVoiceReady() ? SENSEVOICE_DIR : '';
+      if (!asrModelDir && !svDir) {
+        throw new Error('Chưa cài mô hình nhận dạng giọng nói (SenseVoiceSmall). Vui lòng mở 🧰 Công cụ để cài.');
       }
 
       // Dịch bằng AI Provider (Gemini/OpenAI/Qwen) chạy ở Node -> worker chỉ nhận dạng (skip translation)
@@ -2269,6 +2302,8 @@ async function extractAndPrepareSegments(videoPathOrOpts, targetLang = 'vi', cus
         extractedWavPath,
         '--asr-dir',
         asrModelDir,
+        '--sv-dir',
+        svDir,
         '--argos-dir',
         ARGOS_MODELS_DIR,
         '--target-lang',
@@ -2282,9 +2317,7 @@ async function extractAndPrepareSegments(videoPathOrOpts, targetLang = 'vi', cus
         '--skip-translation',
         translateInNode ? '1' : '0',
         '--input-lang',
-        inputLang,
-        '--context-title',
-        inputLang === 'zh_d' ? videoContextTitle(videoPath) : ''
+        inputLang
       ];
       // Nhận diện người nói: CHỈ chạy khi người dùng bật (mặc định tắt)
       if (wantDiarize) {
@@ -2292,7 +2325,7 @@ async function extractAndPrepareSegments(videoPathOrOpts, targetLang = 'vi', cus
         workerArgs.push('--diarize', '1', '--diar-dir', DIARIZATION_DIR, '--num-speakers', String(n > 0 ? n : -1));
         onStepChange(2, 'Bước 2/5: Đang nhận dạng giọng nói (ASR) và phân tách người nói...');
       }
-      log('info', `Bước 2: nhận dạng giọng nói bằng ${path.basename(asrModelDir)} • ngôn ngữ đầu vào: ${{ auto: 'Tự động', zh: 'Tiếng Trung', zh_d: 'Tiếng Trung — phương ngữ', en: 'Tiếng Anh' }[inputLang]}${wantDiarize ? ' + phân tách người nói' : ' (không nhận diện người nói)'}...`);
+      log('info', `Bước 2: nhận dạng giọng nói bằng ${svDir ? 'SenseVoiceSmall' : path.basename(asrModelDir)} • ngôn ngữ đầu vào: ${{ auto: 'Tự động (Phổ thông / Quảng Đông / địa phương)', zh: 'Tiếng Trung Phổ thông', yue: 'Tiếng Quảng Đông', en: 'Tiếng Anh' }[inputLang]}${wantDiarize ? ' + phân tách người nói' : ' (không nhận diện người nói)'}...`);
 
       // Timeout theo độ dài âm thanh (CPU int8 ~ 0.3–1.5x thời gian thực tùy model)
       const asrTimeout = Math.max(240000, Math.round(mediaInfo.duration * 3000) + 120000);
@@ -2327,12 +2360,15 @@ async function extractAndPrepareSegments(videoPathOrOpts, targetLang = 'vi', cus
         speakerCount: asrPayload.speakerCount || 1,
         diarization: asrPayload.diarization || (wantDiarize ? null : { ok: false, skipped: true }),
         englishModule: Boolean(asrPayload.englishModule),
+        sourceDialect: asrPayload.sourceDialect || '',
+        languageShare: asrPayload.languageShare || null,
         segments: sanitizeSegments(asrPayload.segments).map((x) => ({ ...x, translatedText: '' }))
       };
       if (ckpt) ckpt.asr = asr;
       log(
         'ok',
         `Bước 2: nhận dạng ${asr.segments.length} đoạn thoại • ngôn ngữ ${asr.detectedSourceLang.toUpperCase()} (${Math.round(asr.languageProbability * 100)}%)` +
+          `${asr.sourceDialect === 'yue' ? ' • có giọng Quảng Đông (đã báo cho bộ dịch)' : ''}` +
           `${asr.diarization && asr.diarization.ok ? ` • ${asr.speakerCount} người nói` : ''}${asr.englishModule ? ' • dùng module tiếng Anh (chia câu theo dấu câu, gộp mảnh ngắt ở dấu phẩy)' : ''}.`
       );
       if (asr.diarization && asr.diarization.ok === false && asr.diarization.error) log('warn', asr.diarization.error);
@@ -2364,6 +2400,8 @@ async function extractAndPrepareSegments(videoPathOrOpts, targetLang = 'vi', cus
       log('info', `Bước 3: dịch ${missingCount} đoạn bằng "${effectiveProvider}"${options.aiModel ? ` • model ${options.aiModel}` : ''}${resumed > 0 ? ` — chạy tiếp, giữ ${resumed} đoạn đã dịch` : ''}.`);
       const tr = await translateSegmentList(segments, detectedCode, targetLang, {
         ...trOptions,
+        sourceDialect: asr.sourceDialect || '',
+        sourceOrigin: asr.transcriptSource === 'ocr' ? 'ocr' : '',
         onlyMissing: true,
         onPartial: (list) => {
           if (ckpt) ckpt.translated = list.map((x) => ({ ...x }));
@@ -3080,8 +3118,8 @@ function startExtractTask(params = {}) {
     aiModel: params.aiModel,
     autoDiarize: params.autoDiarize === true,
     numSpeakers: params.numSpeakers,
-    inputLang: ['zh', 'zh_d', 'en'].includes(params.inputLang) ? params.inputLang : 'auto',
-    transcriptSource: ['ocr', 'asr'].includes(params.transcriptSource) ? params.transcriptSource : 'auto'
+    inputLang: ['zh', 'yue', 'en'].includes(params.inputLang) ? params.inputLang : 'auto',
+    transcriptSource: ['ocr', 'ocr_en', 'asr'].includes(params.transcriptSource) ? params.transcriptSource : 'auto'
   };
   if (!task.params.autoDiarize) {
     const dz = task.stages.find((x) => x.code === 'diarize');
@@ -3093,7 +3131,7 @@ function startExtractTask(params = {}) {
   stale.slice(0, Math.max(0, stale.length - 5)).forEach(cleanupExtractCheckpoint);
   const p = task.params;
   runExtractTask(task, p);
-  task.log('info', `Bắt đầu • nguồn: ${source} • video: ${task.inputFileName} • dịch sang ${String(p.targetLang).toUpperCase()} • bộ dịch: ${p.translationProvider || 'auto'}${p.aiModel ? ` (${p.aiModel})` : ''} • ngôn ngữ đầu vào: ${{ auto: 'Tự động', zh: 'Tiếng Trung', zh_d: 'Tiếng Trung — phương ngữ', en: 'Tiếng Anh' }[p.inputLang]} • nguồn lời thoại: ${{ auto: 'Tự động (phụ đề → OCR)', ocr: 'OCR phụ đề', asr: 'Nghe giọng nói' }[p.transcriptSource]} • nhận diện người nói: ${p.autoDiarize ? 'BẬT' : 'tắt'}.`);
+  task.log('info', `Bắt đầu • nguồn: ${source} • video: ${task.inputFileName} • dịch sang ${String(p.targetLang).toUpperCase()} • bộ dịch: ${p.translationProvider || 'auto'}${p.aiModel ? ` (${p.aiModel})` : ''} • ngôn ngữ đầu vào: ${{ auto: 'Tự động (Phổ thông / Quảng Đông / địa phương)', zh: 'Tiếng Trung Phổ thông', yue: 'Tiếng Quảng Đông', en: 'Tiếng Anh' }[p.inputLang]} • nguồn lời thoại: ${{ auto: 'Tự động (phụ đề → OCR)', ocr: 'OCR phụ đề chữ Trung', ocr_en: 'OCR phụ đề tiếng Anh', asr: 'Nghe giọng nói' }[p.transcriptSource]} • nhận diện người nói: ${p.autoDiarize ? 'BẬT' : 'tắt'}.`);
   return serializeExtractTask(task);
 }
 
@@ -3185,6 +3223,35 @@ function cancelExtractTask(taskId) {
  * Xác thực phân đoạn TRƯỚC khi chuyển sang TTS: đủ ID, timestamp hợp lệ & tăng dần,
  * có lời dịch, lời dịch không còn chữ của ngôn ngữ nguồn / ghi chú thừa.
  */
+/** Xem thử OCR 1 khung hình (tab Tinh chỉnh OCR): ảnh khung hình (JPEG base64) + các dòng chữ và quyết định nhận/bỏ. */
+async function previewOcrFrame(videoPath, atSec, params, subLang = 'zh') {
+  if (!videoPath || !fs.existsSync(videoPath)) throw new Error('Không tìm thấy file video.');
+  if (!/\.(mp4|mkv|mov|webm|flv|avi|m4v|ts)$/i.test(videoPath)) throw new Error('File không phải video.');
+  if (!isOcrModelsReady()) throw new Error('Chưa cài "Đọc phụ đề trong hình (OCR)" — vào 🧰 Công cụ để cài.');
+  const p = require('./ocr_settings');
+  const merged = params ? { ...p.loadOcrSettings(), ...params } : p.loadOcrSettings();
+  const analysis = await runLocalAiWorker(
+    ['ocr_subtitles', '--video', videoPath, '--models', OCR_MODELS_DIR, '--ffmpeg', getFfmpegBin(), '--mode', 'frame', '--at', String(Number(atSec) || 0), '--params', JSON.stringify(merged), '--sub-lang', subLang === 'en' ? 'en' : 'zh'],
+    null,
+    120000
+  );
+  if (!analysis || !analysis.ok) throw new Error((analysis && analysis.error) || 'OCR không đọc được khung hình.');
+  const tmp = path.join(os.tmpdir(), `cn_ocr_preview_${process.pid}_${Date.now()}.jpg`);
+  try {
+    await new Promise((resolve, reject) => {
+      const pr = spawn(getFfmpegBin(), ['-hide_banner', '-loglevel', 'error', '-y', '-ss', String(analysis.t), '-i', videoPath, '-frames:v', '1', '-vf', 'scale=960:-2', '-q:v', '4', tmp], { windowsHide: true });
+      pr.on('error', reject);
+      pr.on('close', (code) => (code === 0 && fs.existsSync(tmp) ? resolve() : reject(new Error('FFmpeg không lấy được khung hình.'))));
+    });
+    const image = `data:image/jpeg;base64,${fs.readFileSync(tmp).toString('base64')}`;
+    return { ...analysis, image };
+  } finally {
+    try {
+      fs.unlinkSync(tmp);
+    } catch (_) {}
+  }
+}
+
 function validateSegmentsForTts(segments, { targetLang = 'vi', totalDuration = 0 } = {}) {
   const errors = [];
   const warnings = [];
@@ -3367,6 +3434,7 @@ module.exports = {
   LOCAL_MODELS_CATALOG,
   TRANSLATION_PROVIDERS_CATALOG,
   TRANSLATION_STYLES,
+  previewOcrFrame,
   LANGUAGE_INFO,
   DUBBING_PIPELINE_STEPS,
   getSupportedVoices,

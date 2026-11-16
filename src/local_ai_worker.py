@@ -815,6 +815,198 @@ def refine_segment_starts(audio_path, segments, sr=16000):
     return segments
 
 
+# ----------------------------------------------------------------------------------------------
+# SenseVoiceSmall (FunAudioLLM, int8, qua sherpa-onnx) + Silero VAD — nhận dạng giọng nói mặc định.
+# Bản int8 2024-07-17. Đo trên video tiếng Tứ Xuyên có nhạc nền (bản chuẩn 134 câu đọc tay): 85,0% chữ đúng so với
+# Whisper small 60,0%, nhanh hơn ~5 lần. Chia câu theo dấu kết câu và khoảng ngừng giữa các chữ (mốc thời gian từng chữ).
+# ----------------------------------------------------------------------------------------------
+class _AsrInfo:
+    def __init__(self, language, duration, prob=0.0):
+        self.language = language
+        self.duration = duration
+        self.language_probability = prob
+
+
+SV_GAP_SPLIT = 0.6   # khoảng cách giữa mốc bắt đầu 2 chữ liền nhau >= 0,6 s (≈ ngừng >= 0,4 s) → ranh giới câu
+SV_MAX_LEN = 7.0     # câu dài hơn → tách ở khoảng ngừng lớn nhất / dấu phẩy
+SV_LANG_MAP = {"zh": "zh", "yue": "zh", "en": "en", "ja": "ja", "ko": "ko"}
+# Chữ chỉ dùng trong tiếng Quảng Đông viết (khẩu ngữ) — dấu hiệu video nói tiếng Quảng Đông
+CANTONESE_RE = re.compile(r"[咗哋唔嘅佢冇喺嘢咁啲噉睇嚟嗰啱乜嘥攞揾噃喎]")
+
+
+def sensevoice_ready(sv_dir):
+    return bool(sv_dir) and all(os.path.exists(os.path.join(sv_dir, f)) for f in ("model.int8.onnx", "tokens.txt", "silero_vad.onnx"))
+
+
+def _sv_vad_segments(sv_dir, samples, sr):
+    import numpy as _np
+    import sherpa_onnx as so
+
+    cfg = so.VadModelConfig()
+    cfg.silero_vad.model = os.path.join(sv_dir, "silero_vad.onnx")
+    cfg.silero_vad.min_silence_duration = 0.25
+    cfg.silero_vad.min_speech_duration = 0.2
+    cfg.silero_vad.max_speech_duration = 15
+    cfg.sample_rate = sr
+    vad = so.VoiceActivityDetector(cfg, buffer_size_in_seconds=60)
+    win = cfg.silero_vad.window_size
+    spans = []
+    for i in range(0, len(samples), win):
+        vad.accept_waveform(samples[i:i + win])
+        while not vad.empty():
+            spans.append((vad.front.start, vad.front.start + len(vad.front.samples)))
+            vad.pop()
+    vad.flush()
+    while not vad.empty():
+        spans.append((vad.front.start, vad.front.start + len(vad.front.samples)))
+        vad.pop()
+    # VAD cắt sát → mất chữ đầu/cuối câu ("老板" → "板"). Nới mỗi đoạn 0,3 s hai đầu nhưng không lấn sang đoạn bên cạnh.
+    pad = int(0.3 * sr)
+    out = []
+    for k, (a, b) in enumerate(spans):
+        lo = max(0, a - pad, (spans[k - 1][1] + a) // 2 if k > 0 else 0)
+        hi = min(len(samples), b + pad, (b + spans[k + 1][0]) // 2 if k + 1 < len(spans) else len(samples))
+        out.append((lo / float(sr), _np.asarray(samples[lo:hi], dtype=_np.float32)))
+    return out
+
+
+def _sv_recognizer(sv_dir, language):
+    import sherpa_onnx as so
+
+    return so.OfflineRecognizer.from_sense_voice(
+        model=os.path.join(sv_dir, "model.int8.onnx"), tokens=os.path.join(sv_dir, "tokens.txt"),
+        num_threads=4, language=language, use_itn=True,
+    )
+
+
+def _sv_decode(rec, sr, samples):
+    st = rec.create_stream()
+    st.accept_waveform(sr, samples)
+    rec.decode_stream(st)
+    return st.result
+
+
+_SV_WORD_RE = re.compile(r"[0-9A-Za-z\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]")
+_SV_ABBR = {"mr", "mrs", "ms", "dr", "st", "vs", "jr", "sr", "no", "mt", "etc", "prof", "inc", "ltd"}
+
+
+def _sv_split(seg_start, seg_end, tokens, times, lang):
+    """Chia 1 đoạn nói (VAD) thành các câu theo dấu kết câu / khoảng ngừng giữa các CHỮ.
+
+    - Dấu câu và dấu cách luôn dính vào chữ đứng trước (mốc thời gian của dấu câu hay bị muộn → không dùng).
+    - Tiếng Anh: dấu chấm không kết câu ở viết tắt ("Mr.") hay số thập phân ("3.5").
+    """
+    items = [(t, float(x)) for t, x in zip(tokens, times) if t and not (t.startswith("<|") and t.endswith("|>"))]
+    widx = [i for i, (t, _) in enumerate(items) if _SV_WORD_RE.search(t)]
+    if not widx:
+        return []
+    groups, cur = [], []
+    word = ""
+    for k, i in enumerate(widx):
+        nxt_i = widx[k + 1] if k + 1 < len(widx) else len(items)
+        chunk = items[i:nxt_i]  # chữ + dấu câu / dấu cách theo sau
+        cur.append(chunk)
+        tok = chunk[0][0]
+        word = tok.strip() if (tok.startswith(" ") or tok.startswith("\u2581") or not word) else word + tok.strip()
+        if k + 1 >= len(widx):
+            break
+        nxt_tok = items[widx[k + 1]][0]
+        gap = items[widx[k + 1]][1] - chunk[0][1]
+        tail = normalize_punct("".join(t for t, _ in chunk[1:]))
+        ends = bool(re.search(r"[。！？!?；;…]", tail))
+        if not ends and "." in tail:
+            starts_new_word = nxt_tok.startswith(" ") or nxt_tok.startswith("\u2581") or " " in tail
+            ends = starts_new_word and word.lower().strip(".") not in _SV_ABBR and not (word[-1:].isdigit() and nxt_tok.strip()[:1].isdigit())
+        soft = bool(re.search(r"[，,、：:]", tail))
+        cur_len = chunk[0][1] - cur[0][0][1]
+        if ends or gap >= SV_GAP_SPLIT or (cur_len >= SV_MAX_LEN and (gap >= 0.35 or soft)):
+            groups.append(cur)
+            cur = []
+    if cur:
+        groups.append(cur)
+    pieces = []
+    for gi, grp in enumerate(groups):
+        text = "".join(t for chunk in grp for t, _ in chunk).replace("\u2581", " ")
+        text = normalize_punct(re.sub(r"\s+", " ", text)).strip().strip(",，、")
+        if lang != "en":
+            text = text.replace(" ", "")
+        if not _SV_WORD_RE.search(text):
+            continue
+        start = seg_start + grp[0][0][1]
+        nxt_start = seg_start + groups[gi + 1][0][0][1] if gi + 1 < len(groups) else seg_end
+        end = min(seg_start + grp[-1][0][1] + 0.35, nxt_start - 0.05, seg_end)
+        pieces.append({"start": round(start, 3), "end": round(max(end, start + 0.3), 3), "text": text})
+    return pieces
+
+
+def transcribe_sensevoice(sv_dir, audio_path, input_lang="auto"):
+    """Trả về (danh sách {start,end,text}, info{language, duration, dialect}).
+
+    - "auto" (mặc định): SenseVoice tự nhận giọng TỪNG ĐOẠN NÓI (Phổ thông, Quảng Đông, Anh, Nhật, Hàn) — video trộn
+      nhiều giọng / tiếng địa phương vẫn nhận đúng. Đo trên video tiếng Tứ Xuyên: tự nhận 85,0% ≈ ép Phổ thông 85,5%
+      (ép Quảng Đông chỉ 76% — chỉ dùng cho video nói tiếng Quảng Đông).
+    - "zh" ép tiếng Phổ thông, "yue" ép tiếng Quảng Đông, "en" ép tiếng Anh.
+    """
+    samples, sr = read_wav_float32(audio_path)
+    duration = len(samples) / float(sr) if sr else 0.0
+    vsegs = _sv_vad_segments(sv_dir, samples, sr)
+    forced = {"zh": "zh", "yue": "yue", "en": "en"}.get(input_lang, "auto")
+
+    def decode_all(language, split_lang, report=True):
+        rec = _sv_recognizer(sv_dir, language)
+        out, vt = [], {}
+        for st, smp in vsegs:
+            res = _sv_decode(rec, sr, smp)
+            tag = (getattr(res, "lang", "") or "").strip("<|>") or language
+            vt[tag] = vt.get(tag, 0) + len(smp)
+            en = st + len(smp) / float(sr)
+            if report and duration > 0:
+                emit_progress({"stage": "asr", "pos": round(en, 2), "total": round(duration, 2)})
+            # ngôn ngữ của TỪNG đoạn nói (video tiếng Trung có câu tiếng Anh xen giữa vẫn giữ dấu cách)
+            txt = getattr(res, "text", "") or ""
+            seg_lang = "en" if (split_lang == "en" or tag == "en" or len(re.findall(r"[A-Za-z]", txt)) > 2 * len(re.findall(r"[\u4e00-\u9fff]", txt))) else "zh"
+            out.extend(_sv_split(st, en, list(res.tokens), list(res.timestamps), seg_lang))
+        return out, vt
+
+    raw, votes = decode_all(forced, "en" if forced == "en" else "zh")
+    total = float(sum(votes.values()) or 1)
+    # Nhãn ngôn ngữ của model chưa đủ chắc (bản 2025 gắn "yue" cho mọi câu, kể cả tiếng Anh)
+    # → gộp zh/yue thành tiếng Trung; nhận biết giọng Quảng Đông qua CHỮ đặc trưng trong lời nhận dạng được.
+    merged = {}
+    for k, v in votes.items():
+        kk = SV_LANG_MAP.get(k, k)
+        merged[kk] = merged.get(kk, 0) + v
+    # → xét chữ viết của lời nhận dạng được
+    alltext = "".join(r.get("text", "") for r in raw)
+    n_latin = len(re.findall(r"[A-Za-z]", alltext))
+    n_cjk = len(re.findall(r"[\u4e00-\u9fff]", alltext))
+    n_kana = len(re.findall(r"[\u3040-\u30ff]", alltext))
+    n_hangul = len(re.findall(r"[\uac00-\ud7af]", alltext))
+    if forced in ("zh", "yue", "en"):
+        top = "zh" if forced in ("zh", "yue") else "en"
+    elif n_hangul > max(n_cjk, n_latin) * 0.5:
+        top = "ko"
+    elif n_kana > n_cjk * 0.2:
+        top = "ja"
+    elif n_latin > n_cjk * 3:
+        top = "en"
+    else:
+        top = "zh"
+    merged = {top: total}
+    lang = top
+    if forced == "auto" and lang == "en":
+        # Đã nhận ra tiếng Anh → giải mã lại với chế độ ép tiếng Anh: chế độ tự nhận hay viết số trong câu tiếng Anh
+        # thành chữ Trung ("3.5" → "三点五") và dính từ. Nhanh (~1 s mỗi phút âm thanh).
+        raw, _ = decode_all("en", "en", report=False)
+    yue_lines = sum(1 for r in raw if CANTONESE_RE.search(r.get("text", "")))
+    dialect = "yue" if lang == "zh" and raw and (yue_lines >= 2 or yue_lines / float(len(raw)) >= 0.1) else ""
+    info = _AsrInfo(lang, duration, round(merged.get(top, 0) / total, 3))
+    info.dialect = dialect
+    info.lang_share = {k: round(v / total, 2) for k, v in merged.items()}
+    info.cantonese_lines = yue_lines
+    return raw, info
+
+
 def cmd_transcribe_and_translate(args):
     from faster_whisper import WhisperModel
 
@@ -822,19 +1014,35 @@ def cmd_transcribe_and_translate(args):
     if not audio_path or not os.path.exists(audio_path):
         return {"ok": False, "errorCode": "MISSING_AUDIO", "error": f"Không tìm thấy file âm thanh đã tách: {audio_path}"}
 
-    asr_dir = args.asr_dir
-    if not asr_dir or not os.path.exists(os.path.join(asr_dir, "model.bin")):
+    asr_dir = args.asr_dir or ""
+    sv_dir = getattr(args, "sv_dir", "") or ""
+    whisper_ok = bool(asr_dir) and os.path.exists(os.path.join(asr_dir, "model.bin"))
+    sv_ok = sensevoice_ready(sv_dir)
+    if not whisper_ok and not sv_ok:
         return {
             "ok": False,
             "errorCode": "MISSING_ASR_MODEL",
-            "error": "Chưa cài đặt mô hình nhận dạng giọng nói Local (Faster-Whisper). Vui lòng tải mô hình trong mục Công cụ.",
+            "error": "Chưa cài mô hình nhận dạng giọng nói (SenseVoiceSmall). Vui lòng cài trong mục 🧰 Công cụ.",
         }
-
-    model = WhisperModel(asr_dir, device="cpu", compute_type="int8", cpu_threads=4)
     # Ngôn ngữ đầu vào người dùng chọn: auto | zh | en
     input_lang = (getattr(args, "input_lang", "auto") or "auto").strip().lower()[:4]
     english_mode = False
-    if input_lang == "en":
+    model = None
+    asr_engine = "whisper"
+    if sv_ok and not (input_lang == "en" and whisper_ok):
+        # SenseVoice mặc định. Video tiếng Anh: dùng module tiếng Anh của Whisper nếu máy còn Whisper (chuyên tiếng Anh).
+        sv_raw, sv_info = transcribe_sensevoice(sv_dir, audio_path, input_lang)
+        if sv_info.language == "en" and whisper_ok:
+            asr_engine = "whisper"
+            input_lang = "en"
+        else:
+            asr_engine = "sensevoice"
+    if asr_engine == "whisper":
+        model = WhisperModel(asr_dir, device="cpu", compute_type="int8", cpu_threads=4)
+    if asr_engine == "sensevoice":
+        segments_gen, info = [], sv_info
+        english_mode = sv_info.language == "en"
+    elif input_lang == "en":
         import asr_english
 
         segments_gen, info = asr_english.transcribe_english(model, audio_path)
@@ -850,7 +1058,7 @@ def cmd_transcribe_and_translate(args):
             **({"language": "zh"} if input_lang in ("zh", "zh_d") else {}),
         )
     detected_lang0 = (getattr(info, "language", "") or "").lower()
-    if not english_mode and input_lang == "auto" and detected_lang0.startswith("en"):
+    if asr_engine == "whisper" and not english_mode and input_lang == "auto" and detected_lang0.startswith("en"):
         # Tự động nhận ra tiếng Anh → dùng module tiếng Anh riêng (generator chưa chạy nên không tốn thêm lượt nhận dạng)
         import asr_english
 
@@ -864,7 +1072,7 @@ def cmd_transcribe_and_translate(args):
         # tiếng Tứ Xuyên có nhạc nền: 55% → 64% chữ đúng). Không áp cho tiếng phổ thông.
         title = (getattr(args, "context_title", "") or "").strip()[:80]
         zh_prompt = (title + "。" if title else "") + "以下是方言（四川话等）的对话，使用简体中文书写，带标点符号。常用词：做啥子、晓得、没得、啥子、嘞、噻、嗦、脑壳、老子、巴适、要得、咋个、莫得。"
-    if not english_mode and (input_lang in ("zh", "zh_d") or detected_lang0.startswith("zh")):
+    if asr_engine == "whisper" and not english_mode and (input_lang in ("zh", "zh_d") or detected_lang0.startswith("zh")):
         segments_gen, info = model.transcribe(
             audio_path,
             beam_size=4,
@@ -876,7 +1084,7 @@ def cmd_transcribe_and_translate(args):
             vad_parameters=dict(min_silence_duration_ms=350, speech_pad_ms=200),
             condition_on_previous_text=False,
         )
-    raw_list = []
+    raw_list = list(sv_raw) if asr_engine == "sensevoice" else []
     total_dur = float(getattr(info, "duration", 0.0) or 0.0)
     for s in segments_gen:
         if total_dur > 0:
@@ -891,7 +1099,7 @@ def cmd_transcribe_and_translate(args):
     # Nếu vad_filter quá chặt trên clip ngắn, thử lại không có vad_filter — NHƯNG chỉ khi VAD (ngưỡng nới lỏng)
     # vẫn thấy có tiếng nói. Không có bước này, Whisper "bịa" chữ trên nhạc/âm đơn (thấy trên CPU x86 Windows).
     speech_present = True
-    if not raw_list:
+    if not raw_list and model is not None:
         try:
             from faster_whisper.audio import decode_audio
             from faster_whisper.vad import VadOptions, get_speech_timestamps
@@ -902,7 +1110,7 @@ def cmd_transcribe_and_translate(args):
             )
         except Exception:
             speech_present = True  # không kiểm tra được thì giữ hành vi cũ
-    if not raw_list and speech_present:
+    if not raw_list and speech_present and model is not None:
         segments_gen2, info2 = model.transcribe(
             audio_path,
             beam_size=3,
@@ -921,6 +1129,8 @@ def cmd_transcribe_and_translate(args):
             raw_list.append({"start": s.start, "end": s.end, "text": (s.text or "").strip()})
 
     if english_mode:
+        import asr_english
+
         merged_segments = asr_english.merge_english_segments(raw_list, getattr(info, "duration", 0.0) or 0.0)
     else:
         merged_segments = merge_and_clean_asr_segments(raw_list, getattr(info, "duration", 0.0) or 0.0)
@@ -958,7 +1168,7 @@ def cmd_transcribe_and_translate(args):
     else:
         translator = LocalArgosTranslator(args.argos_dir)
         whisper_en_bridge = None
-        if (detected_code in ("ja", "ko") or (
+        if model is not None and (detected_code in ("ja", "ko") or (
             detected_code == "zh" and not translator.has_pair("translate-zh_en-1_9")
         )) and not cloud_consent:
             try:
@@ -1025,7 +1235,7 @@ def cmd_transcribe_and_translate(args):
             }
         )
 
-    model_name = os.path.basename(asr_dir.rstrip("/\\"))
+    model_name = os.path.basename(asr_dir.rstrip("/\\")) if asr_dir else ""
     result = {
         "ok": True,
         "detectedSourceLang": detected_code,
@@ -1036,7 +1246,14 @@ def cmd_transcribe_and_translate(args):
             "probability": detected_prob,
         },
         "totalDuration": round(float(getattr(info, "duration", 0.0) or 0.0), 2),
-        "asrModelUsed": f"Faster-Whisper ({model_name}, int8 CPU Local){' • module tiếng Anh' if english_mode else ''}",
+        "asrModelUsed": (
+            f"SenseVoiceSmall (int8 CPU Local, chia câu theo khoảng ngừng){' • tiếng Anh' if english_mode else ''}"
+            if asr_engine == "sensevoice"
+            else f"Faster-Whisper ({model_name}, int8 CPU Local){' • module tiếng Anh' if english_mode else ''}"
+        ),
+        "asrEngine": asr_engine,
+        "sourceDialect": getattr(info, "dialect", "") or "",
+        "languageShare": getattr(info, "lang_share", None),
         "inputLangMode": input_lang,
         "englishModule": english_mode,
         "translationMode": translation_mode,
@@ -1063,14 +1280,24 @@ def cmd_ocr_subtitles(args):
     """Đọc phụ đề cứng tiếng Trung trong hình video (PP-OCRv4 ONNX, chỉ vùng phụ đề)."""
     import subtitle_ocr as so
 
-    ocr = so.SubtitleOCR(args.models)
+    lang = so.set_sub_lang(getattr(args, "sub_lang", "zh"))
+    try:
+        ocr = so.SubtitleOCR(args.models, lang=lang)
+    except RuntimeError as err:
+        return {"ok": False, "errorCode": "MISSING_OCR_EN", "error": str(err)}
+    try:
+        so.set_params(json.loads(args.params) if args.params else {})
+    except ValueError:
+        so.set_params({})
     if args.mode == "probe":
         return so.probe(ocr, args.ffmpeg, args.video, samples=int(args.samples or 24))
+    if args.mode == "frame":
+        return so.analyze_frame(ocr, args.ffmpeg, args.video, float(args.at or 0))
     return so.extract(
         ocr,
         args.ffmpeg,
         args.video,
-        fps=float(args.fps or 4),
+        fps=float(args.fps) if args.fps else so.PARAMS["fps"],
         on_progress=lambda t, d: emit_progress({"stage": "ocr", "pos": round(t, 2), "total": round(d, 2)}),
     )
 
@@ -1348,7 +1575,8 @@ def main():
 
     p_asr = sub.add_parser("transcribe_and_translate")
     p_asr.add_argument("--audio", required=True)
-    p_asr.add_argument("--asr-dir", required=True)
+    p_asr.add_argument("--asr-dir", default="")
+    p_asr.add_argument("--sv-dir", default="")
     p_asr.add_argument("--argos-dir", required=True)
     p_asr.add_argument("--target-lang", default="vi")
     p_asr.add_argument("--cloud-consent", default="0")
@@ -1385,8 +1613,11 @@ def main():
     p_ocr.add_argument("--models", required=True)
     p_ocr.add_argument("--ffmpeg", required=True)
     p_ocr.add_argument("--mode", default="extract")
-    p_ocr.add_argument("--fps", default="4")
+    p_ocr.add_argument("--fps", default="")
     p_ocr.add_argument("--samples", default="24")
+    p_ocr.add_argument("--params", default="")
+    p_ocr.add_argument("--at", default="0")
+    p_ocr.add_argument("--sub-lang", default="zh")
 
     p_sep = sub.add_parser("separate_background")
     p_sep.add_argument("--input", required=True)

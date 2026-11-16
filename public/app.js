@@ -100,6 +100,13 @@ function switchWorkspaceTab(tabId) {
   document.querySelectorAll('.tab-pane').forEach((pane) => {
     pane.classList.toggle('active', pane.id === `tabPane_${tabId}`);
   });
+  // Bảng "Tiến trình tải & Video có sẵn" chỉ dùng cho các tab tải/lồng tiếng
+  const dlSec = document.getElementById('downloadsSection');
+  if (dlSec) dlSec.style.display = ['ai', 'capabilities', 'ocr'].includes(tabId) ? 'none' : '';
+  // Chuyển tab luôn về đầu trang
+  const main = document.querySelector('.main-area');
+  if (main) main.scrollTop = 0;
+  window.scrollTo(0, 0);
 
   if (tabId === 'dubbing') {
     loadDubbingConfig();
@@ -110,6 +117,8 @@ function switchWorkspaceTab(tabId) {
     pollAccountScanStatus();
   } else if (tabId === 'ai') {
     loadAiConfig();
+  } else if (tabId === 'ocr') {
+    loadOcrTab();
   }
 }
 
@@ -1673,14 +1682,30 @@ function openDubbingForFile(filePath) {
     toggleDubExternalSource(true);
     const inp = document.getElementById('dubExternalVideoPath');
     if (inp) inp.value = filePath;
-    extractScriptFromSelectedVideo();
+    onDubSourceChosen();
     return;
   }
   toggleDubExternalSource(false);
   populateDubVideoSelect(filePath);
   const sel = document.getElementById('dubVideoSelect');
   if (sel) sel.value = filePath;
-  extractScriptFromSelectedVideo();
+  onDubSourceChosen();
+}
+
+/**
+ * Chọn video nguồn chỉ ĐƯA VIDEO VÀO NGUỒN — không tự phân đoạn/dịch.
+ * Người dùng xem lại thiết lập (ngôn ngữ, nguồn lời thoại, bộ dịch, văn phong) rồi tự nhấn "Phân đoạn & Dịch".
+ */
+function onDubSourceChosen() {
+  currentDubSegments = [];
+  renderDubSegments();
+  const btn = document.getElementById('dubExtractBtn');
+  if (btn) {
+    btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    btn.classList.add('pulse-hint');
+    setTimeout(() => btn.classList.remove('pulse-hint'), 2400);
+  }
+  toast('🎬 Đã chọn video nguồn. Kiểm tra thiết lập rồi nhấn "📝 Phân đoạn & Dịch" để bắt đầu.');
 }
 
 /* ---------- Nguồn video ngoài (người dùng chọn đường dẫn video + thư mục đầu ra) ---------- */
@@ -1716,10 +1741,7 @@ async function pickDubExternalVideo() {
     if (!data.success) throw new Error(data.error || 'Không mở được hộp thoại chọn file');
     if (!data.path) return toast('Chưa chọn file nào (hoặc hệ điều hành không hỗ trợ hộp thoại) — có thể dán đường dẫn vào ô.', 'warn');
     document.getElementById('dubExternalVideoPath').value = data.path;
-    currentDubSegments = [];
-    renderDubSegments();
-    toast('📂 Đã chọn video nguồn ngoài — đang phân đoạn & dịch...');
-    extractScriptFromSelectedVideo();
+    onDubSourceChosen();
   } catch (e) {
     toast('Lỗi chọn file: ' + e.message, 'error');
   }
@@ -1741,9 +1763,7 @@ async function pickDubExternalOutputDir() {
 
 function onSelectDubVideo() {
   const val = document.getElementById('dubVideoSelect')?.value;
-  if (val) {
-    extractScriptFromSelectedVideo();
-  }
+  if (val) onDubSourceChosen();
 }
 
 function onChangeDubLanguage() {
@@ -2064,7 +2084,7 @@ async function cancelExtractTaskUi() {
 
 async function retranslateCurrentSegments() {
   if (!currentDubSegments || currentDubSegments.length === 0) {
-    toast('Chưa có câu thoại nào để dịch lại. Hãy nhấn "Phân đoạn & Dịch (ASR)" trước!', 'warn');
+    toast('Chưa có câu thoại nào để dịch lại. Hãy nhấn "Phân đoạn & Dịch" trước!', 'warn');
     return;
   }
   const targetLang = document.getElementById('dubTargetLangSelect')?.value || 'vi';
@@ -2106,7 +2126,7 @@ function renderDubSegments() {
   if (!wrap) return;
 
   if (currentDubSegments.length === 0) {
-    wrap.innerHTML = `<div class="empty-hint" style="padding:12px;">Chưa có phân đoạn nào. Nhấn "📝 Phân đoạn & Dịch (ASR)" hoặc "➕ Thêm đoạn thoại".</div>`;
+    wrap.innerHTML = `<div class="empty-hint" style="padding:12px;">Chưa có phân đoạn nào. Nhấn "📝 Phân đoạn & Dịch" hoặc "➕ Thêm đoạn thoại".</div>`;
     renderSpeakerVoiceMapping();
     return;
   }
@@ -2273,7 +2293,7 @@ function renderDubbingStepsProgress(steps, activeStepIndex, currentMessage, isEr
 
   const defaultSteps = [
     { index: 1, code: 'extract_audio', label: 'Bước 1/5: Tách track âm thanh gốc từ video (FFmpeg)' },
-    { index: 2, code: 'asr_recognize', label: 'Bước 2/5: Nhận dạng giọng nói & chia mốc thời gian (Faster-Whisper ASR)' },
+    { index: 2, code: 'asr_recognize', label: 'Bước 2/5: Lấy lời thoại (OCR phụ đề hoặc nghe bằng SenseVoice) & chia mốc thời gian' },
     { index: 3, code: 'translate_segments', label: 'Bước 3/5: Dịch từng đoạn thoại sang ngôn ngữ đích' },
     { index: 4, code: 'synthesize_tts', label: 'Bước 4/5: Tạo giọng đọc bản dịch & căn khớp thời gian (TTS & Time-Stretch)' },
     { index: 5, code: 'mux_and_verify', label: 'Bước 5/5: Ghép âm thanh vào video & xác minh có tiếng' }
@@ -3021,6 +3041,35 @@ async function refreshComponentsBadge() {
   } catch (_) {}
 }
 
+/** Xóa 1 công cụ / model để giải phóng dung lượng: hiện dung lượng, đường dẫn sẽ xóa, cảnh báo; công cụ bắt buộc phải xác nhận 2 lần. */
+async function uninstallComponent(toolId) {
+  try {
+    const pr = await (await fetch(`/api/tools/uninstall-plan?toolId=${encodeURIComponent(toolId)}`)).json();
+    if (!pr.success) return toast(pr.error || 'Không xóa được thành phần này.', 'error');
+    const p = pr.plan;
+    const size = fmtComponentSize(p.sizeBytes / 1048576);
+    const warn = (p.warnings || []).map((w) => `⚠️ ${w}`).join('\n');
+    const msg =
+      `${p.critical ? '⛔ CÔNG CỤ BẮT BUỘC\n\n' : ''}Xóa "${p.name}"?\n\nGiải phóng: ${size}\nSẽ xóa:\n${p.paths.map((x) => '• ' + x).join('\n')}` +
+      (warn ? `\n\n${warn}` : '') +
+      '\n\nCó thể cài lại bất cứ lúc nào bằng nút "📦 Tải & Cài đặt".';
+    if (!window.confirm(msg)) return;
+    if (p.critical && !window.confirm(`⛔ ${p.warnings[0]}\n\nBạn CHẮC CHẮN vẫn muốn xóa công cụ bắt buộc này?`)) return;
+    const res = await fetch('/api/tools/uninstall', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ toolId, confirmCritical: Boolean(p.critical) })
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Xóa thất bại');
+    toast(`🗑️ Đã xóa "${data.result.name}" — giải phóng ${fmtComponentSize(data.result.freedBytes / 1048576)}.`);
+    loadInstallableToolsCatalog();
+    refreshComponentsBadge();
+  } catch (e) {
+    toast('Lỗi xóa: ' + e.message, 'error');
+  }
+}
+
 function renderToolInstallerList(tools) {
   const list = document.getElementById('installerToolsList');
   if (!list) return;
@@ -3098,6 +3147,9 @@ function renderToolInstallerList(tools) {
                   : `
                 <button class="btn-sm" style="height:34px;background:#ecfdf5;border-color:#a7f3d0;color:#047857;" onclick="installTool('${escapeHtml(t.id)}', true)">
                   🔄 Tải & Cài lại
+                </button>
+                <button class="btn-sm" style="height:30px;${rec.level === 'required' ? 'background:#fef2f2;border-color:#fca5a5;color:#b91c1c;' : 'background:#fff;border-color:#fecaca;color:#b91c1c;'}" onclick="uninstallComponent('${escapeHtml(t.id)}')" title="${rec.level === 'required' ? 'Công cụ bắt buộc — không khuyến nghị xóa' : 'Xóa để giải phóng dung lượng (cài lại được bất cứ lúc nào)'}">
+                  🗑️ Xóa${rec.level === 'required' ? ' (không khuyến nghị)' : ''}
                 </button>
               `
               }
@@ -3569,4 +3621,139 @@ async function resumeDubbingJobUi(jobId) {
   } catch (e) {
     toast('Không chạy tiếp được: ' + e.message, 'error');
   }
+}
+
+
+/* ==================== TAB: TINH CHỈNH OCR PHỤ ĐỀ ==================== */
+const OCR_PARAM_UI = [
+  { key: 'band_top', label: 'Vùng đọc phụ đề — từ', unit: '% chiều cao', min: 0, max: 95, step: 1, pct: true, help: 'Mép trên của vùng tìm phụ đề (0% = đỉnh khung hình). Phụ đề nằm cao hơn thường lệ thì giảm số này.' },
+  { key: 'band_bottom', label: 'Vùng đọc phụ đề — đến', unit: '% chiều cao', min: 5, max: 100, step: 1, pct: true, help: 'Mép dưới của vùng tìm phụ đề (100% = đáy khung hình).' },
+  { key: 'center_tol', label: 'Lệch tối đa khỏi giữa', unit: '% chiều rộng', min: 5, max: 50, step: 1, pct: true, help: 'Dòng chữ có tâm lệch khỏi giữa quá mức này bị bỏ (biển hiệu, logo ở góc). Phụ đề căn trái/phải thì tăng lên.' },
+  { key: 'min_conf', label: 'Độ tin cậy tối thiểu', unit: '%', min: 50, max: 95, step: 1, pct: true, help: 'Chữ OCR đọc kém tin cậy hơn mức này bị bỏ. Tăng để bớt chữ sai; giảm nếu phụ đề nét mảnh bị sót.' },
+  { key: 'fps', label: 'Số khung đọc mỗi giây', unit: 'khung/giây', min: 1, max: 10, step: 1, help: 'Nhiều hơn = mốc thời gian câu chính xác hơn, bắt được câu rất ngắn, nhưng chậm hơn.' },
+  { key: 'min_duration', label: 'Bỏ dòng hiện dưới', unit: 'giây', min: 0.1, max: 2, step: 0.1, help: 'Dòng chữ chỉ thoáng qua ngắn hơn mức này bị bỏ (chữ nháy, hiệu ứng).' },
+  { key: 'static_max_ratio', label: 'Bỏ chữ đứng yên quá', unit: '% thời lượng video', min: 10, max: 100, step: 5, pct: true, help: 'Chữ giống hệt nằm trên màn hình lâu hơn mức này (logo, watermark, tiêu đề cố định) bị bỏ.' }
+];
+let ocrSettings = null;
+let ocrDefaults = null;
+let ocrLastPreview = null;
+
+function fmtOcrTime(sec) {
+  const s = Math.max(0, Math.round(Number(sec) || 0));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+function ocrVideoPathValue() {
+  return (document.getElementById('ocrVideoPath')?.value || '').trim() || document.getElementById('ocrVideoSelect')?.value || '';
+}
+async function loadOcrTab() {
+  const sel = document.getElementById('ocrVideoSelect');
+  if (sel) {
+    const prev = sel.value || document.getElementById('dubVideoSelect')?.value || '';
+    const vids = (allSavedFilesCache || []).filter((f) => !/[\\/]Dubbed[\\/]|_Dubbed_/i.test(f.filePath));
+    sel.innerHTML = `<option value="">— Chọn video đã tải —</option>` + vids.map((f) => `<option value="${escapeHtml(f.filePath)}">${escapeHtml((f.platform ? f.platform + ' • ' : '') + (f.fileName || f.filePath.split(/[\\/]/).pop()))}</option>`).join('');
+    if (prev && vids.some((f) => f.filePath === prev)) sel.value = prev;
+  }
+  try {
+    const d = await (await fetch('/api/ocr/settings')).json();
+    ocrSettings = d.settings;
+    ocrDefaults = d.defaults;
+  } catch (_) {}
+  renderOcrParams();
+}
+function onOcrVideoChange() {
+  ocrLastPreview = null;
+  document.getElementById('ocrPreviewWrap').style.display = 'none';
+}
+function renderOcrParams() {
+  const form = document.getElementById('ocrParamsForm');
+  if (!form || !ocrSettings) return;
+  form.innerHTML = OCR_PARAM_UI.map((p) => {
+    const v = ocrSettings[p.key];
+    const shown = p.pct ? Math.round(v * 100) : v;
+    const def = ocrDefaults ? (p.pct ? Math.round(ocrDefaults[p.key] * 100) : ocrDefaults[p.key]) : '';
+    return `<div class="ocr-param">
+      <div class="ocr-param-head"><strong>${escapeHtml(p.label)}</strong>
+        <span><input type="number" id="ocrP_${p.key}" value="${shown}" min="${p.min}" max="${p.max}" step="${p.step}" style="width:70px;" oninput="onOcrParamInput('${p.key}', this.value)" /> ${escapeHtml(p.unit)}</span></div>
+      <input type="range" id="ocrR_${p.key}" value="${shown}" min="${p.min}" max="${p.max}" step="${p.step}" style="width:100%;" oninput="onOcrParamInput('${p.key}', this.value)" />
+      <div class="ocr-param-help">${escapeHtml(p.help)} <span style="color:#94a3b8;">(mặc định ${def})</span></div>
+    </div>`;
+  }).join('');
+}
+function onOcrParamInput(key, raw) {
+  const p = OCR_PARAM_UI.find((x) => x.key === key);
+  const num = Number(raw);
+  if (!p || !Number.isFinite(num)) return;
+  ocrSettings[key] = p.pct ? num / 100 : num;
+  const a = document.getElementById(`ocrP_${key}`);
+  const b = document.getElementById(`ocrR_${key}`);
+  if (a && a.value !== String(raw)) a.value = raw;
+  if (b && b.value !== String(raw)) b.value = raw;
+  document.getElementById('ocrParamsStatus').textContent = 'Chưa lưu — nhấn "Xem thử" để kiểm tra với tham số mới.';
+  drawOcrOverlay();
+}
+async function saveOcrParams() {
+  const d = await (await fetch('/api/ocr/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings: ocrSettings }) })).json();
+  if (d.success) {
+    ocrSettings = d.settings;
+    renderOcrParams();
+    drawOcrOverlay();
+    document.getElementById('ocrParamsStatus').textContent = '✅ Đã lưu — áp dụng cho lần "Phân đoạn & Dịch" tiếp theo.';
+    toast('💾 Đã lưu tham số OCR.');
+  }
+}
+async function resetOcrParams() {
+  const d = await (await fetch('/api/ocr/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reset: true }) })).json();
+  if (d.success) {
+    ocrSettings = d.settings;
+    renderOcrParams();
+    drawOcrOverlay();
+    document.getElementById('ocrParamsStatus').textContent = '↩ Đã về mặc định.';
+  }
+}
+async function runOcrPreview() {
+  const videoPath = ocrVideoPathValue();
+  if (!videoPath) return toast('Hãy chọn video trước.', 'warn');
+  const btn = document.getElementById('ocrPreviewBtn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Đang đọc khung hình...';
+  try {
+    const at = Number(document.getElementById('ocrTimeRange').value) || 0;
+    const d = await (await fetch('/api/ocr/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ videoPath, at, settings: ocrSettings, subLang: document.getElementById('ocrSubLangSelect')?.value || 'zh' }) })).json();
+    if (!d.success) throw new Error(d.error);
+    ocrLastPreview = d.preview;
+    const range = document.getElementById('ocrTimeRange');
+    range.max = String(Math.max(1, Math.floor(d.preview.duration)));
+    range.value = String(d.preview.t);
+    document.getElementById('ocrTimeLabel').textContent = fmtOcrTime(d.preview.t);
+    document.getElementById('ocrPreviewImg').src = d.preview.image;
+    document.getElementById('ocrPreviewWrap').style.display = '';
+    drawOcrOverlay();
+    const lines = d.preview.lines || [];
+    document.getElementById('ocrPreviewLines').innerHTML = lines.length
+      ? lines.map((l) => `<div style="padding:4px 8px;margin:3px 0;border-radius:6px;border:1px solid ${l.keep ? '#a7f3d0' : '#fecaca'};background:${l.keep ? '#ecfdf5' : '#fef2f2'};">
+          ${l.keep ? '✅ Nhận là phụ đề' : '❌ Bỏ'}: <strong>${escapeHtml(l.text)}</strong> <span style="color:#64748b;">(tin cậy ${Math.round(l.conf * 100)}%)</span>${l.reasons.length ? ` — ${escapeHtml(l.reasons.join('; '))}` : ''}</div>`).join('') +
+        `<div style="color:#64748b;margin-top:4px;">Khi đọc cả video, OCR còn so độ cao các dòng giữa nhiều khung để chỉ giữ đúng hàng phụ đề.</div>`
+      : `<div class="empty-hint" style="padding:8px;">Không thấy dòng chữ nào trong vùng đọc ở thời điểm này. Thử kéo tới đoạn có phụ đề, hoặc mở rộng vùng đọc.</div>`;
+  } catch (e) {
+    toast('Lỗi xem thử OCR: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🔍 Xem thử khung hình';
+  }
+}
+/** Vẽ vùng đọc (xanh dương), giới hạn lệch giữa (nét đứt) và các dòng chữ (xanh lá = nhận, đỏ = bỏ) lên ảnh. */
+function drawOcrOverlay() {
+  const ov = document.getElementById('ocrOverlay');
+  if (!ov || !ocrSettings) return;
+  const s = ocrSettings;
+  const pct = (v) => `${(v * 100).toFixed(2)}%`;
+  let html = `<div style="position:absolute;left:0;right:0;top:${pct(s.band_top)};height:${pct(Math.max(0, s.band_bottom - s.band_top))};background:rgba(37,99,235,0.12);border:2px solid rgba(37,99,235,0.85);box-sizing:border-box;"></div>`;
+  html += `<div style="position:absolute;top:${pct(s.band_top)};height:${pct(Math.max(0, s.band_bottom - s.band_top))};left:${pct(0.5 - s.center_tol)};width:${pct(2 * s.center_tol)};border-left:2px dashed rgba(250,204,21,0.95);border-right:2px dashed rgba(250,204,21,0.95);box-sizing:border-box;"></div>`;
+  if (ocrLastPreview) {
+    for (const l of ocrLastPreview.lines || []) {
+      const c = l.keep ? '#10b981' : '#ef4444';
+      html += `<div style="position:absolute;left:${pct(l.x0)};top:${pct(l.y0)};width:${pct(l.x1 - l.x0)};height:${pct(l.y1 - l.y0)};border:2px solid ${c};box-sizing:border-box;"></div>`;
+    }
+  }
+  ov.innerHTML = html;
 }

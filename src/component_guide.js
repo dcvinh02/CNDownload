@@ -21,8 +21,9 @@ const DISK_MB = {
   ytdlp: 36,
   ffmpeg: 44,
   webkitSniffer: 0.1,
+  localAsrSenseVoice: 238,
   localAsrSmall: 464,
-  subtitleOcr: 16,
+  subtitleOcr: 23,
   speakerDiarization: 45,
   voiceSeparation: 38,
   localTts: 36,
@@ -32,6 +33,7 @@ const DISK_MB = {
 
 /** Thành phần cần "Môi trường Python AI" để chạy. */
 const REQUIRES = {
+  localAsrSenseVoice: ['pythonCore'],
   localAsrSmall: ['pythonCore'],
   subtitleOcr: ['pythonCore'],
   speakerDiarization: ['pythonCore'],
@@ -47,8 +49,9 @@ const PURPOSE = {
   ytdlp: 'Công cụ tải video chính (Bilibili, YouTube, Youku, WeTV…) và tải hàng loạt.',
   ffmpeg: 'Ghép hình + tiếng, chuyển đổi định dạng, xuất video lồng tiếng.',
   webkitSniffer: 'Trình duyệt ẩn của macOS để lấy video Douyin / Kuaishou / Xiaohongshu và quét trang cá nhân.',
-  localAsrSmall: 'Nhận dạng lời nói trong video (Whisper small) — bước đầu của "Phân đoạn & Dịch" để lồng tiếng.',
-  subtitleOcr: 'Đọc lời thoại từ PHỤ ĐỀ CHỮ TRUNG in sẵn trong video (OCR) thay vì nghe — chính xác hơn nhiều khi video có tiếng địa phương hoặc nhạc nền. Tự bỏ qua chữ ngoài vùng phụ đề (biển hiệu, logo).',
+  localAsrSenseVoice: 'Nghe lời nói trong video (SenseVoiceSmall) — bước đầu của "Phân đoạn & Dịch" khi video không có phụ đề in sẵn. Chính xác hơn Whisper rõ rệt với tiếng Trung có nhạc nền / tiếng địa phương, nhanh hơn ~5 lần.',
+  localAsrSmall: 'Nhận dạng lời nói bằng Whisper small — bản cũ, nay chỉ là dự phòng (ưu tiên dùng cho video tiếng Anh nếu có).',
+  subtitleOcr: 'Đọc lời thoại từ PHỤ ĐỀ in sẵn trong video (chữ Trung hoặc tiếng Anh, OCR) thay vì nghe — chính xác hơn nhiều khi video có tiếng địa phương hoặc nhạc nền. Tự bỏ qua chữ ngoài vùng phụ đề (biển hiệu, logo).',
   speakerDiarization: 'Phân biệt nhiều người nói để mỗi người một giọng lồng tiếng (trong app mặc định TẮT).',
   voiceSeparation: 'Tách lời nói gốc khỏi nhạc nền — video lồng tiếng chỉ còn giọng mới + nhạc/tiếng động gốc.',
   localTts: 'Giọng đọc tiếng Việt nhẹ (Piper) — dự phòng khi không có VieNeu.',
@@ -116,14 +119,18 @@ function recommend(id, ctx) {
       return { level: 'recommended', text: 'Nên cài nếu bạn tải video Douyin / Kuaishou / Xiaohongshu (rất nhẹ; cần Xcode Command Line Tools).' };
     case 'pythonCore':
       return { level: 'recommended', text: 'Nên cài nếu bạn dùng Lồng tiếng / Phân đoạn & Dịch. Chỉ tải video thì không cần.' };
+    case 'localAsrSenseVoice':
+      return { level: 'recommended', text: 'Nên cài nếu bạn dùng Lồng tiếng (nghe lời thoại khi video không có phụ đề in sẵn). Thay cho Whisper small.' };
     case 'localAsrSmall':
-      return { level: 'recommended', text: 'Nên cài nếu bạn dùng Lồng tiếng (bắt buộc cho Phân đoạn & Dịch).' };
+      return sel.has('localAsrSenseVoice')
+        ? { level: 'not_needed', text: 'Không cần — đã có SenseVoiceSmall (chính xác & nhanh hơn). Có thể xóa để tiết kiệm 464 MB; chỉ giữ nếu dịch nhiều video tiếng Anh.' }
+        : { level: 'optional', text: 'Tùy chọn — nên cài SenseVoiceSmall thay thế (nhẹ hơn, chính xác hơn).' };
     case 'vieneuTts':
       return { level: 'recommended', text: 'Nên cài nếu bạn lồng tiếng sang tiếng Việt (giọng đọc chính của app).' };
     case 'voiceSeparation':
       return { level: 'recommended', text: 'Nên cài nếu bạn lồng tiếng (nhẹ, giúp bỏ giọng gốc).' };
     case 'subtitleOcr':
-      return { level: 'recommended', text: 'Nên cài nếu bạn lồng tiếng video Douyin/Kuaishou có phụ đề in sẵn (rất nhẹ, ~16 MB).' };
+      return { level: 'recommended', text: 'Nên cài nếu bạn lồng tiếng video Douyin/Kuaishou có phụ đề in sẵn (rất nhẹ, ~23 MB).' };
     case 'speakerDiarization':
       return { level: 'optional', text: 'Không cần, trừ khi bạn hay lồng video nhiều nhân vật và muốn mỗi người một giọng.' };
     case 'localTts':

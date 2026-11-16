@@ -23,12 +23,13 @@
       <button class="nav-tab active" data-tab="single" onclick="switchWorkspaceTab('single')">📥 Tải Video Đơn</button>
       <button class="nav-tab" data-tab="account" onclick="switchWorkspaceTab('account')">👤 Quét Tài khoản & Tải Hàng loạt</button>
       <button class="nav-tab" data-tab="dubbing" onclick="switchWorkspaceTab('dubbing')">🎙️ Lồng tiếng Video</button>
+      <button class="nav-tab" data-tab="ocr" onclick="switchWorkspaceTab('ocr')">🔤 Tinh chỉnh OCR</button>
       <button class="nav-tab" data-tab="ai" onclick="switchWorkspaceTab('ai')">🤖 Tích hợp AI</button>
-      <button class="nav-tab" data-tab="capabilities" onclick="switchWorkspaceTab('capabilities')">🛡️ Ma trận Khả năng & OS</button>
+      <button class="nav-tab" data-tab="capabilities" onclick="switchWorkspaceTab('capabilities')">🧰 Công cụ & binary</button>
     </div>
 
     <div class="topbar-actions">
-      <div class="status-badge" id="engineStatusBadge" onclick="switchWorkspaceTab('capabilities')" style="cursor:pointer;" title="Nhấn để xem chi tiết Ma trận Khả năng">
+      <div class="status-badge" id="engineStatusBadge" onclick="switchWorkspaceTab('capabilities')" style="cursor:pointer;" title="Nhấn để xem Công cụ & binary">
         <span class="status-dot" id="engineStatusDot"></span>
         <span id="engineStatusText">Đang kiểm tra công cụ...</span>
       </div>
@@ -410,9 +411,13 @@
               <div class="dub-ctrl-col" style="max-width:250px;">
                 <div style="font-size:11.5px;font-weight:700;color:#334155;margin-bottom:4px;">✍️ Văn phong bản dịch:</div>
                 <select id="dubTranslationStyleSelect" class="folder-input" style="height:34px;">
-                  <option value="natural">Khẩu ngữ tự nhiên (Lồng tiếng chuẩn)</option>
-                  <option value="review">Review / Chuyên nghiệp (Gọn, rõ ý)</option>
-                  <option value="story">Kể chuyện / Thuyết minh (Mượt mà)</option>
+                  <option value="natural">💬 Tự nhiên — đời thường (mặc định)</option>
+                  <option value="comic">😂 Hài hước / Comic — lóng, vui nhộn</option>
+                  <option value="serious">🎓 Nghiêm túc — tin tức, tài liệu</option>
+                  <option value="ancient">🏯 Cổ trang / Kiếm hiệp — ta, ngươi, huynh, muội</option>
+                  <option value="youth">📱 Trẻ trung — vlog, TikTok</option>
+                  <option value="review">⭐ Review / Giới thiệu sản phẩm</option>
+                  <option value="story">📖 Kể chuyện / Thuyết minh</option>
                 </select>
               </div>
             </div>
@@ -432,19 +437,20 @@
             </div>
             <div class="dub-ctrl-col" style="max-width:210px;">
               <div style="font-size:12px;font-weight:700;margin-bottom:5px;">Ngôn ngữ đầu vào (video gốc):</div>
-              <select id="dubInputLangSelect" class="folder-input" style="height:36px;" title="Tiếng Anh dùng module chia câu riêng; tiếng Trung giữ nguyên cách xử lý hiện tại">
-                <option value="auto">🌐 Tự động nhận diện</option>
-                <option value="zh">🇨🇳 Tiếng Trung</option>
-                <option value="zh_d">🇨🇳 Tiếng Trung — phương ngữ (Tứ Xuyên...)</option>
+              <select id="dubInputLangSelect" class="folder-input" style="height:36px;" title="Tự động: nhận giọng từng đoạn nói (Phổ thông, Quảng Đông, địa phương, Anh) — hợp với video trộn nhiều giọng">
+                <option value="auto">🌐 Tự động (Phổ thông / Quảng Đông / địa phương)</option>
+                <option value="zh">🇨🇳 Tiếng Trung Phổ thông</option>
+                <option value="yue">🇭🇰 Tiếng Quảng Đông</option>
                 <option value="en">🇺🇸 Tiếng Anh (module riêng)</option>
               </select>
             </div>
             <div class="dub-ctrl-col" style="max-width:230px;">
               <div style="font-size:12px;font-weight:700;margin-bottom:5px;">Nguồn lời thoại:</div>
-              <select id="dubTranscriptSourceSelect" class="folder-input" style="height:36px;" title="Video có phụ đề chữ Trung in sẵn thì đọc phụ đề (OCR) chính xác hơn nghe — nhất là tiếng địa phương, nhạc nền to">
+              <select id="dubTranscriptSourceSelect" class="folder-input" style="height:36px;" title="Video có phụ đề in sẵn thì đọc phụ đề (OCR) chính xác hơn nghe — nhất là tiếng địa phương, nhạc nền to. Tự động: thử phụ đề chữ Trung trước, không có thì phụ đề tiếng Anh, không có nữa thì nghe.">
                 <option value="auto">✨ Tự động (có phụ đề → đọc phụ đề, không có → nghe)</option>
-                <option value="ocr">🔤 Đọc phụ đề trong hình (OCR)</option>
-                <option value="asr">👂 Nghe giọng nói (Whisper)</option>
+                <option value="ocr">🔤 Đọc phụ đề chữ Trung (OCR)</option>
+                <option value="ocr_en">🔤 Đọc phụ đề tiếng Anh (OCR)</option>
+                <option value="asr">👂 Nghe giọng nói (SenseVoice)</option>
               </select>
             </div>
             <div class="dub-ctrl-col" style="max-width:210px;">
@@ -463,7 +469,7 @@
             </div>
             <div class="dubbing-actions-wrap">
               <button class="btn-outline" style="height:36px;" onclick="previewSelectedVoice()">🔊 Nghe thử giọng</button>
-              <button class="btn-outline" style="height:36px;border-color:#93c5fd;background:#eff6ff;color:#1d4ed8;" onclick="extractScriptFromSelectedVideo()">📝 Phân đoạn & Dịch (ASR)</button>
+              <button class="btn-outline" style="height:36px;border-color:#93c5fd;background:#eff6ff;color:#1d4ed8;" id="dubExtractBtn" onclick="extractScriptFromSelectedVideo()">📝 Phân đoạn & Dịch</button>
             </div>
           </div>
           <div id="dubExternalSourcePanel" class="dub-external-panel" style="display:none;">
@@ -588,7 +594,7 @@
               <span>Bắt đầu (s)</span><span>Kết thúc (s)</span><span>Người nói</span><span>Lời thoại gốc</span><span>Lời dịch (sẽ đọc)</span><span></span>
             </div>
             <div id="dubSegmentsWrap" style="max-height:320px;overflow-y:auto;border:1px solid #e2e8f0;border-radius:8px;padding:8px;background:#fff;">
-              <div class="empty-hint" style="padding:12px;">Nhấn "📝 Phân đoạn & Dịch (ASR)" để nhận diện lời thoại thực tế từ âm thanh video, hoặc nhấn "➕ Thêm đoạn thoại".</div>
+              <div class="empty-hint" style="padding:12px;">Nhấn "📝 Phân đoạn & Dịch" để lấy lời thoại (đọc phụ đề hoặc nghe giọng nói), hoặc nhấn "➕ Thêm đoạn thoại".</div>
             </div>
           </div>
 
@@ -719,8 +725,50 @@
         </section>
       </div>
 
+      <!-- ==================== TAB: TINH CHỈNH OCR PHỤ ĐỀ ==================== -->
+      <div id="tabPane_ocr" class="tab-pane">
+        <section class="card">
+          <div class="search-title">🔤 Tinh chỉnh OCR — đọc phụ đề in sẵn trong video</div>
+          <div style="font-size:12.5px;color:#475569;margin:4px 0 10px;">
+            OCR chỉ đọc chữ trong <strong>vùng phụ đề</strong> (khung xanh) và chỉ nhận dòng chữ Trung <strong>gần giữa</strong>, đủ <strong>độ tin cậy</strong>.
+            Chọn 1 video, kéo tới đoạn có phụ đề rồi nhấn <em>Xem thử</em>: dòng <span style="color:#047857;font-weight:700;">xanh lá</span> được nhận là phụ đề,
+            dòng <span style="color:#b91c1c;font-weight:700;">đỏ</span> bị bỏ (kèm lý do). Mặc định đã chạy tốt với đa số video Douyin — chỉ chỉnh khi phụ đề nằm chỗ khác thường.
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+            <select id="ocrVideoSelect" class="folder-input" style="height:34px;flex:1;min-width:240px;" onchange="onOcrVideoChange()"></select>
+            <input id="ocrVideoPath" class="folder-input" style="height:34px;flex:1;min-width:200px;" placeholder="…hoặc dán đường dẫn video khác" onchange="onOcrVideoChange()" />
+            <select id="ocrSubLangSelect" class="folder-input" style="height:34px;width:190px;" onchange="onOcrVideoChange()" title="Ngôn ngữ phụ đề cần đọc (video song ngữ: chọn dòng muốn lấy)">
+              <option value="zh">🇨🇳 Phụ đề chữ Trung</option>
+              <option value="en">🇺🇸 Phụ đề tiếng Anh</option>
+            </select>
+          </div>
+          <div style="display:flex;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap;">
+            <span style="font-size:12px;font-weight:700;color:#334155;">⏱ Thời điểm:</span>
+            <input type="range" id="ocrTimeRange" min="0" max="60" step="0.5" value="3" style="flex:1;min-width:180px;" oninput="document.getElementById('ocrTimeLabel').textContent=fmtOcrTime(this.value)" />
+            <span id="ocrTimeLabel" style="font-size:12px;min-width:48px;">0:03</span>
+            <button class="btn-primary" style="height:34px;padding:0 14px;" id="ocrPreviewBtn" onclick="runOcrPreview()">🔍 Xem thử khung hình</button>
+          </div>
+          <div id="ocrPreviewWrap" style="margin-top:10px;display:none;">
+            <div id="ocrPreviewStage" style="position:relative;max-width:960px;width:100%;">
+              <img id="ocrPreviewImg" alt="Khung hình xem thử" style="width:100%;display:block;border-radius:6px;" />
+              <div id="ocrOverlay" style="position:absolute;inset:0;pointer-events:none;"></div>
+            </div>
+            <div id="ocrPreviewLines" style="margin-top:8px;font-size:12.5px;"></div>
+          </div>
+        </section>
+        <section class="card">
+          <div class="search-title">⚙️ Tham số OCR</div>
+          <div id="ocrParamsForm" class="ocr-params"></div>
+          <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
+            <button class="btn-primary" style="height:34px;padding:0 14px;" onclick="saveOcrParams()">💾 Lưu tham số</button>
+            <button class="btn-outline" style="height:34px;" onclick="resetOcrParams()">↩ Về mặc định</button>
+            <span id="ocrParamsStatus" style="font-size:12px;color:#64748b;align-self:center;"></span>
+          </div>
+        </section>
+      </div>
+
       <!-- ==================== DANH SÁCH TIẾN TRÌNH TẢI & FILE CÓ SẴN (HIỂN THỊ CHUNG) ==================== -->
-      <section class="card">
+      <section class="card" id="downloadsSection">
         <div class="section-subtitle" style="margin-bottom: 6px;">
           <div style="display:flex;align-items:center;gap:8px;">
             <span id="dlSectionTitle">Tiến trình tải & Video có sẵn (Tất cả nền tảng)</span>

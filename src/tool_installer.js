@@ -30,6 +30,64 @@ const { getFfmpegPath } = require('./extractors/ytdlp_engine');
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const BIN_DIR = path.join(PROJECT_ROOT, 'bin');
 const MODELS_DIR = path.join(BIN_DIR, 'models');
+// SenseVoiceSmall (FunAudioLLM) bản int8 do sherpa-onnx phát hành chính thức + Silero VAD để chia đoạn nói
+const SENSEVOICE_DIR = path.join(MODELS_DIR, 'asr', 'sensevoice-small-int8');
+// Bản 2024-07-17: đo trên video tiếng Tứ Xuyên 85,0% chữ đúng (bản 2025-09-09: 80,2%) và nghe tiếng Anh đúng
+// ("Mr. Smith bought 3.5 kilos…"; bản 2025 ra "MT SMITHOUGHT 三 POINT FIVE"), có dấu câu, nhãn ngôn ngữ hoạt động.
+const SENSEVOICE_PACKAGE = {
+  url: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2',
+  sha256: '7d1efa2138a65b0b488df37f8b89e3d91a60676e416f515b952358d83dfd347e',
+  sizeBytes: 163002883,
+  folder: 'sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17',
+  files: ['model.int8.onnx', 'tokens.txt', 'LICENSE']
+};
+const SILERO_VAD = {
+  url: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx',
+  sha256: '9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6',
+  sizeBytes: 643854
+};
+function isSenseVoiceInstalled() {
+  try {
+    // version.txt ghi bản đã cài — máy còn bản cũ (2025-09-09) sẽ hiện "chưa cài" để cài lại bản tốt hơn
+    return fs.readFileSync(path.join(SENSEVOICE_DIR, 'version.txt'), 'utf8').trim() === SENSEVOICE_PACKAGE.folder && fs.statSync(path.join(SENSEVOICE_DIR, 'model.int8.onnx')).size > 200 * 1024 * 1024 && fs.statSync(path.join(SENSEVOICE_DIR, 'tokens.txt')).size > 100000 && fs.statSync(path.join(SENSEVOICE_DIR, 'silero_vad.onnx')).size === SILERO_VAD.sizeBytes;
+  } catch (_) {
+    return false;
+  }
+}
+
+/** Tải gói SenseVoice + VAD, kiểm SHA-256, giải nén và chỉ giữ file cần thiết (bỏ test_wavs). */
+async function installSenseVoice(job, tempDir) {
+  fs.mkdirSync(SENSEVOICE_DIR, { recursive: true });
+  const archive = path.join(tempDir, 'sensevoice.tar.bz2');
+  await downloadFileWithProgress(SENSEVOICE_PACKAGE.url, archive, (dl, total) => {
+    job.downloadedBytes = dl;
+    job.totalBytes = total || SENSEVOICE_PACKAGE.sizeBytes;
+    job.progress = Math.min(70, 10 + Math.round((dl / job.totalBytes) * 60));
+    job.step = `Đang tải SenseVoiceSmall: ${(dl / 1048576).toFixed(1)} / ${(job.totalBytes / 1048576).toFixed(0)} MB...`;
+  });
+  job.step = 'Đang kiểm tra SHA-256 gói SenseVoice...';
+  const sha = await computeFileSha256(archive);
+  if (sha !== SENSEVOICE_PACKAGE.sha256) throw new Error(`SHA-256 gói SenseVoice không khớp (${sha}) — file tải về bị hỏng hoặc không phải bản chính thức.`);
+  job.progress = 75;
+  job.step = 'Đang giải nén SenseVoiceSmall...';
+  const exDir = path.join(tempDir, 'sv_extract');
+  fs.mkdirSync(exDir, { recursive: true });
+  await pyEnv.extractArchive(archive, exDir);
+  for (const f of SENSEVOICE_PACKAGE.files) {
+    const src = path.join(exDir, SENSEVOICE_PACKAGE.folder, f);
+    if (!fs.existsSync(src)) throw new Error(`Gói SenseVoice thiếu file ${f}.`);
+    fs.copyFileSync(src, path.join(SENSEVOICE_DIR, f));
+  }
+  fs.rmSync(exDir, { recursive: true, force: true });
+  job.progress = 85;
+  job.step = 'Đang tải Silero VAD (chia đoạn nói)...';
+  const vadTmp = path.join(tempDir, 'silero_vad.onnx');
+  await downloadFileWithProgress(SILERO_VAD.url, vadTmp, () => {});
+  const vsha = await computeFileSha256(vadTmp);
+  if (vsha !== SILERO_VAD.sha256) throw new Error(`SHA-256 Silero VAD không khớp (${vsha}).`);
+  fs.copyFileSync(vadTmp, path.join(SENSEVOICE_DIR, 'silero_vad.onnx'));
+  fs.writeFileSync(path.join(SENSEVOICE_DIR, 'version.txt'), SENSEVOICE_PACKAGE.folder, 'utf8');
+}
 const VENV_PYTHON = path.join(
   PROJECT_ROOT,
   '.venv',
@@ -134,9 +192,27 @@ function resolveOfficialToolSource(toolId, platform = process.platform, arch = p
         'Hoặc chạy lệnh cài đặt thủ công: `.venv/bin/python3 -c "from faster_whisper import download_model; download_model(\'tiny\', output_dir=\'bin/models/asr/faster-whisper-tiny\')"`.'
       ]
     },
+    localAsrSenseVoice: {
+      id: 'localAsrSenseVoice',
+      name: 'SenseVoiceSmall ASR (Nhận dạng giọng nói — Đề xuất)',
+      category: 'Mô hình AI Local (ASR)',
+      officialProvider: 'GitHub Releases (k2-fsa/sherpa-onnx — FunAudioLLM SenseVoiceSmall int8 2024-07-17 + Silero VAD)',
+      license: 'FunASR Model License (SenseVoice, dùng miễn phí, ghi nguồn) / MIT (Silero VAD)',
+      downloadUrl: SENSEVOICE_PACKAGE.url,
+      targetPath: path.join(SENSEVOICE_DIR, 'model.int8.onnx'),
+      archiveType: 'sensevoice_asr',
+      minBytes: 200 * 1024 * 1024,
+      estimatedSizeMB: 238,
+      description:
+        'Nhận dạng giọng nói Trung/Anh/Nhật/Hàn/Quảng Đông (FunAudioLLM SenseVoiceSmall, int8). Đo trên video tiếng Tứ Xuyên có nhạc nền: 85% chữ đúng (Whisper small 60%), nhanh hơn ~5 lần, nhẹ hơn một nửa.',
+      remediationSteps: [
+        `Tải thủ công ${SENSEVOICE_PACKAGE.url} (SHA-256 ${SENSEVOICE_PACKAGE.sha256}) → giải nén, chép model.int8.onnx, tokens.txt, LICENSE vào bin/models/asr/sensevoice-small-int8/ và tạo file version.txt chứa "${SENSEVOICE_PACKAGE.folder}".`,
+        `Tải ${SILERO_VAD.url} (SHA-256 ${SILERO_VAD.sha256}) vào cùng thư mục.`
+      ]
+    },
     localAsrSmall: {
       id: 'localAsrSmall',
-      name: 'Faster-Whisper Small ASR (Nhận dạng chính xác hơn — Đề xuất)',
+      name: 'Faster-Whisper Small ASR (dự phòng / tiếng Anh)',
       category: 'Mô hình AI Local (ASR)',
       officialProvider: 'HuggingFace Official (Systran/faster-whisper-small)',
       license: 'MIT License',
@@ -354,6 +430,20 @@ const OCR_PACKAGE = {
   ]
 };
 const OCR_MODELS_DIR = path.join(MODELS_DIR, 'ocr');
+// Model đọc phụ đề TIẾNG ANH (PP-OCRv4 en, giữ dấu cách giữa các từ) — kho model chính thức của RapidOCR (RapidAI) trên ModelScope
+const OCR_EN_MODEL = {
+  url: 'https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/master/onnx/PP-OCRv4/rec/en_PP-OCRv4_rec_mobile.onnx',
+  sha256: 'e8770c967605983d1570cdf5352041dfb68fa0c21664f49f47b155abd3e0e318',
+  file: 'en_PP-OCRv4_rec_mobile.onnx',
+  size: 7653044
+};
+function isOcrEnInstalled() {
+  try {
+    return fs.statSync(path.join(OCR_MODELS_DIR, OCR_EN_MODEL.file)).size === OCR_EN_MODEL.size;
+  } catch (_) {
+    return false;
+  }
+}
 
 function isOcrInstalled() {
   return OCR_PACKAGE.files.every(([, dst, size]) => {
@@ -393,6 +483,16 @@ async function installOcrModels(job) {
   await pyEnv.run(pyEnv.venvPython(pyEnv.VENVS.core), ['-I', '-c', script, pkg, OCR_MODELS_DIR, ...OCR_PACKAGE.files.flatMap(([src, dst]) => [src, dst])], { timeoutMs: 120000 });
   fs.rmSync(pkg, { force: true });
   if (!isOcrInstalled()) throw new Error('Giải nén mô hình OCR không đủ dung lượng — hãy cài lại.');
+  job.progress = 85;
+  job.step = 'Đang tải model đọc phụ đề tiếng Anh (PP-OCRv4 en, ~7,6 MB)...';
+  const enPart = path.join(OCR_MODELS_DIR, `${OCR_EN_MODEL.file}.part`);
+  await downloadFileWithProgress(OCR_EN_MODEL.url, enPart, () => {});
+  const enSha = await computeFileSha256(enPart);
+  if (enSha !== OCR_EN_MODEL.sha256) {
+    fs.rmSync(enPart, { force: true });
+    throw new Error(`Mã SHA-256 model OCR tiếng Anh không khớp (nhận ${enSha.slice(0, 16)}…) — đã hủy.`);
+  }
+  fs.renameSync(enPart, path.join(OCR_MODELS_DIR, OCR_EN_MODEL.file));
 }
 
 async function verifyOcrModels() {
@@ -401,14 +501,14 @@ async function verifyOcrModels() {
   const code = [
     'import sys; sys.path.insert(0, sys.argv[1])',
     'import numpy as np, subtitle_ocr as so',
-    'o = so.SubtitleOCR(sys.argv[2])',
+    'o = so.SubtitleOCR(sys.argv[2], lang=sys.argv[3])',
     'img = np.full((96, 640, 3), 255, np.uint8)',
     'o.detect_lines(img)',
-    'print("OK", len(o.charset))'
+    'print("OK", len(o.charset), len(o.charset_en) if o.rec_en is not None else 0)'
   ].join('\n');
-  const r = await runCapture(py, ['-I', '-c', code, path.join(PROJECT_ROOT, 'src'), OCR_MODELS_DIR], { timeoutMs: 120000 });
-  const m = r.out.match(/OK (\d+)/);
-  if (r.code === 0 && m && Number(m[1]) > 6000) return { ok: true, version: `PP-OCRv4 (nạp thử thành công, ${m[1]} ký tự)`, sha256: null, sizeBytes: 0 };
+  const r = await runCapture(py, ['-I', '-c', code, path.join(PROJECT_ROOT, 'src'), OCR_MODELS_DIR, isOcrEnInstalled() ? 'en' : 'zh'], { timeoutMs: 120000 });
+  const m = r.out.match(/OK (\d+) (\d+)/);
+  if (r.code === 0 && m && Number(m[1]) > 6000) return { ok: true, version: `PP-OCRv4 (nạp thử thành công: chữ Trung ${m[1]} ký tự${Number(m[2]) ? `, tiếng Anh ${m[2]} ký tự` : ''})`, sha256: null, sizeBytes: 0 };
   return { ok: false, error: `Không nạp được mô hình OCR: ${r.out.slice(-300)}` };
 }
 
@@ -789,6 +889,21 @@ async function verifyInstalledToolOrModel(toolId) {
     }
   }
 
+  if (toolId === 'localAsrSenseVoice') {
+    if (!isSenseVoiceInstalled()) return { ok: false, sha256, error: 'Thiếu file SenseVoice (model.int8.onnx / tokens.txt / silero_vad.onnx).' };
+    try {
+      const d = SENSEVOICE_DIR;
+      await runShellCommand(
+        VENV_PYTHON,
+        ['-c', `import sherpa_onnx as s; s.OfflineRecognizer.from_sense_voice(model=${JSON.stringify(path.join(d, 'model.int8.onnx'))}, tokens=${JSON.stringify(path.join(d, 'tokens.txt'))}, language="zh", use_itn=True); c=s.VadModelConfig(); c.silero_vad.model=${JSON.stringify(path.join(d, 'silero_vad.onnx'))}; s.VoiceActivityDetector(c, buffer_size_in_seconds=10)`],
+        180000
+      );
+      return { ok: true, sha256, sizeBytes: stat.size, version: 'SenseVoiceSmall int8 + Silero VAD (nạp thử thành công)' };
+    } catch (err) {
+      return { ok: false, sha256, error: `Không nạp được SenseVoiceSmall: ${err.message}` };
+    }
+  }
+
   if (toolId === 'localAsrSmall') {
     try {
       await runShellCommand(
@@ -830,7 +945,7 @@ function getInstallableToolsCatalog() {
 
 function getInstallableToolsCatalogRaw() {
   // Không liệt kê Argos (localNmt) và Whisper tiny (localAsr): đã kiểm nghiệm chất lượng kém, thay bằng Qwen3.5 9B / Whisper small.
-  const ids = ['windowsApp', 'pythonCore', 'ytdlp', 'ffmpeg', 'webkitSniffer', 'localAsrSmall', 'subtitleOcr', 'speakerDiarization', 'voiceSeparation', 'localLlmQwen', 'localTts', 'vieneuTts'];
+  const ids = ['windowsApp', 'pythonCore', 'ytdlp', 'ffmpeg', 'webkitSniffer', 'localAsrSenseVoice', 'localAsrSmall', 'subtitleOcr', 'speakerDiarization', 'voiceSeparation', 'localLlmQwen', 'localTts', 'vieneuTts'];
   const modelsStatus = getLocalModelsStatus();
 
   return ids
@@ -849,6 +964,9 @@ function getInstallableToolsCatalogRaw() {
       }
       if (id === 'subtitleOcr') {
         return { ...spec, os: process.platform, arch: process.arch, installed: isOcrInstalled(), currentSizeBytes: 0 };
+      }
+      if (id === 'localAsrSenseVoice') {
+        return { ...spec, os: process.platform, arch: process.arch, installed: isSenseVoiceInstalled(), currentSizeBytes: 0 };
       }
       if (id === 'pythonCore') {
         // Môi trường Python độc lập với model: người dùng có thể cài Python nhưng không cài Whisper
@@ -962,7 +1080,7 @@ function startToolInstallJob({ toolId, userConfirmed = false, qwenLocation = nul
 
       if (!fs.existsSync(BIN_DIR)) fs.mkdirSync(BIN_DIR, { recursive: true });
 
-      const needsCorePython = ['ocr_models', 'python_core', 'python_asr_model', 'tar_bz2_tts', 'tar_bz2_separation', 'diarization_models', 'argos_packages'];
+      const needsCorePython = ['ocr_models', 'sensevoice_asr', 'python_core', 'python_asr_model', 'tar_bz2_tts', 'tar_bz2_separation', 'diarization_models', 'argos_packages'];
       if (needsCorePython.includes(spec.archiveType)) {
         job.progress = Math.max(job.progress, 8);
         await pyEnv.ensureCoreVenv(
@@ -1115,6 +1233,8 @@ function startToolInstallJob({ toolId, userConfirmed = false, qwenLocation = nul
         );
       } else if (spec.archiveType === 'ocr_models') {
         await installOcrModels(job);
+      } else if (spec.archiveType === 'sensevoice_asr') {
+        await installSenseVoice(job, tempDir);
       } else if (spec.archiveType === 'webview2_app') {
         await installWindowsApp(job);
       } else if (spec.archiveType === 'mlx_llm' || spec.archiveType === 'llamacpp_llm') {
@@ -1409,7 +1529,218 @@ function getToolInstallJob(jobId) {
   return activeInstallJobs.get(jobId) || null;
 }
 
+/* ------------------------------------------------------------------------------------------------
+ * GỠ CÀI ĐẶT công cụ / model để giải phóng dung lượng (nút "🗑️ Xóa" trong app)
+ * - Chỉ xóa đúng thư mục/file của thành phần, và chỉ trong thư mục ứng dụng (hoặc thư mục Qwen dùng chung).
+ * - yt-dlp / FFmpeg là công cụ BẮT BUỘC: vẫn xóa được nhưng kèm cảnh báo đỏ + khuyến nghị không nên xóa (critical).
+ * - Môi trường Python: chỉ xóa được khi không còn thành phần AI nào dùng tới.
+ * - Qwen dùng chung trên Windows: nếu ứng dụng khác còn dùng thì chỉ gỡ khỏi app này, KHÔNG xóa file.
+ * ------------------------------------------------------------------------------------------------ */
+const CRITICAL_TOOLS = {
+  ytdlp: 'KHÔNG KHUYẾN NGHỊ XÓA: yt-dlp là công cụ bắt buộc — xóa đi sẽ không tải được video Bilibili, YouTube, Youku, WeTV… và không tải hàng loạt được.',
+  ffmpeg: 'KHÔNG KHUYẾN NGHỊ XÓA: FFmpeg là công cụ bắt buộc để ghép hình + tiếng, chuyển định dạng và xuất video lồng tiếng.'
+};
+const PY_DEPENDENTS = ['localAsrSenseVoice', 'localAsrSmall', 'subtitleOcr', 'speakerDiarization', 'voiceSeparation', 'localTts'];
+
+function dirSizeBytes(p) {
+  let total = 0;
+  const walk = (q) => {
+    let st;
+    try {
+      st = fs.lstatSync(q);
+    } catch (_) {
+      return;
+    }
+    if (st.isSymbolicLink()) return;
+    if (st.isDirectory()) {
+      let names = [];
+      try {
+        names = fs.readdirSync(q);
+      } catch (_) {}
+      for (const n of names) walk(path.join(q, n));
+    } else total += st.size;
+  };
+  walk(p);
+  return total;
+}
+
+function isInside(child, parent) {
+  if (!parent) return false;
+  const rel = path.relative(path.resolve(parent), path.resolve(child));
+  return rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+function readQwenManifest() {
+  try {
+    return localLlm.QWEN_MANIFEST ? JSON.parse(fs.readFileSync(localLlm.QWEN_MANIFEST, 'utf8')) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/** Kế hoạch gỡ 1 thành phần: đường dẫn sẽ xóa, dung lượng giải phóng, cảnh báo, hoặc lý do không cho xóa. */
+function getUninstallPlan(toolId) {
+  const catalog = getInstallableToolsCatalogRaw();
+  const item = catalog.find((t) => t.id === toolId);
+  if (!item) return { ok: false, error: `Không có thành phần "${toolId}".` };
+  const paths = [];
+  const warnings = [];
+  let keepSharedFiles = false;
+  const critical = Boolean(CRITICAL_TOOLS[toolId]);
+  if (critical) warnings.push(CRITICAL_TOOLS[toolId]);
+  switch (toolId) {
+    case 'ytdlp':
+      paths.push(item.targetPath);
+      break;
+    case 'ffmpeg': {
+      // Bản dự phòng trong bin/; bản đi kèm ứng dụng (npm ffmpeg-static) nằm trong node_modules — không xóa
+      const binFf = resolveOfficialToolSource('ffmpeg').targetPath;
+      paths.push(binFf);
+      if (!fs.existsSync(binFf)) return { ok: false, error: 'Không có gì để xóa: FFmpeg đang dùng bản đi kèm ứng dụng (node_modules/ffmpeg-static), không phải bản tải thêm.' };
+      if (item.activePath && path.resolve(item.activePath) !== path.resolve(binFf)) {
+        // App đang dùng bản đi kèm (ffmpeg-static) → bin/ffmpeg chỉ là bản dự phòng, xóa không ảnh hưởng
+        warnings.length = 0;
+        warnings.push('Đây là bản FFmpeg DỰ PHÒNG trong bin/. Ứng dụng đang dùng bản đi kèm (node_modules/ffmpeg-static) nên xóa không ảnh hưởng chức năng.');
+        return finishPlan(item, paths, warnings, false, false);
+      }
+      break;
+    }
+    case 'webkitSniffer':
+      paths.push(item.targetPath);
+      warnings.push('Sau khi xóa sẽ không tải/quét được Douyin, Kuaishou, Xiaohongshu cho tới khi cài lại.');
+      break;
+    case 'localAsrSenseVoice':
+      paths.push(SENSEVOICE_DIR);
+      if (!catalog.some((t) => t.id === 'localAsrSmall' && t.installed)) warnings.push('"Phân đoạn & Dịch" sẽ chỉ dùng được với video có phụ đề in sẵn (OCR) cho tới khi cài lại.');
+      break;
+    case 'localAsrSmall':
+      paths.push(path.dirname(item.targetPath));
+      if (!catalog.some((t) => t.id === 'localAsrSenseVoice' && t.installed)) warnings.push('"Phân đoạn & Dịch" sẽ chỉ dùng được với video có phụ đề in sẵn (OCR) cho tới khi cài lại.');
+      else warnings.push('Đã có SenseVoiceSmall nên nhận dạng giọng nói vẫn chạy bình thường (tiếng Anh cũng dùng SenseVoice).');
+      break;
+    case 'subtitleOcr':
+      paths.push(OCR_MODELS_DIR);
+      break;
+    case 'speakerDiarization':
+      paths.push(path.join(MODELS_DIR, 'diarization'));
+      break;
+    case 'voiceSeparation':
+      paths.push(path.join(MODELS_DIR, 'separation'));
+      break;
+    case 'localTts':
+      paths.push(path.join(MODELS_DIR, 'tts'));
+      break;
+    case 'vieneuTts':
+      paths.push(path.join(PROJECT_ROOT, '.venv-vieneu'), path.join(MODELS_DIR, 'vieneu-hf'));
+      warnings.push('Giọng đọc mặc định Ngọc Huyền (VieNeu) sẽ không còn; app dùng giọng Piper/hệ điều hành nếu có.');
+      break;
+    case 'windowsApp':
+      paths.push(WINDOWS_APP_EXE, `${WINDOWS_APP_EXE}.config`, WINDOWS_APP_DIR);
+      warnings.push('Lối tắt Desktop sẽ quay về mở app bằng trình duyệt (Start_App_Windows.bat).');
+      break;
+    case 'pythonCore': {
+      const deps = catalog.filter((t) => PY_DEPENDENTS.includes(t.id) && t.installed).map((t) => t.name);
+      if (deps.length) return { ok: false, error: `Còn thành phần đang dùng Môi trường Python: ${deps.join(', ')}. Hãy xóa các thành phần đó trước.` };
+      paths.push(path.join(PROJECT_ROOT, '.venv'));
+      break;
+    }
+    case 'localLlmQwen':
+      if (localLlm.BACKEND === 'llamacpp') {
+        const home = localLlm.QWEN_HOME;
+        const man = readQwenManifest();
+        const others = ((man && man.usedBy) || []).filter((u) => path.resolve(u).toLowerCase() !== path.resolve(PROJECT_ROOT).toLowerCase());
+        paths.push(path.join(PROJECT_ROOT, 'Qwen Local.lnk'));
+        if (others.length) {
+          keepSharedFiles = true;
+          warnings.push(`Qwen dùng chung còn được ứng dụng khác dùng (${others.join('; ')}) — chỉ gỡ khỏi app này, KHÔNG xóa file model.`);
+        } else if (home) {
+          paths.push(home);
+          if (localLlm.QWEN_DEFAULT_HOME && path.resolve(localLlm.QWEN_DEFAULT_HOME).toLowerCase() !== path.resolve(home).toLowerCase()) {
+            paths.push(path.join(localLlm.QWEN_DEFAULT_HOME, 'qwen-local.json'));
+          }
+        }
+      } else {
+        paths.push(path.join(PROJECT_ROOT, '.venv-llm'), localLlm.MODELS_DIR);
+      }
+      warnings.push('Dịch bằng AI Local sẽ không còn — dùng AI API (ChatGPT/Gemini) để dịch.');
+      break;
+    default:
+      return { ok: false, error: 'Thành phần này chưa hỗ trợ xóa.' };
+  }
+  return finishPlan(item, paths, warnings, critical, keepSharedFiles);
+}
+
+function finishPlan(item, paths, warnings, critical, keepSharedFiles) {
+  const toolId = item.id;
+  const allowedRoots = [PROJECT_ROOT, localLlm.QWEN_HOME, localLlm.QWEN_DEFAULT_HOME].filter(Boolean);
+  const existing = paths.filter((p) => fs.existsSync(p));
+  for (const p of existing) {
+    const ok = allowedRoots.some((r) => isInside(p, r) || path.resolve(p) === path.resolve(r)) && path.resolve(p) !== path.resolve(PROJECT_ROOT);
+    if (!ok) return { ok: false, error: `Từ chối xóa đường dẫn ngoài thư mục ứng dụng: ${p}` };
+  }
+  const sizeBytes = existing.reduce((a, p) => a + dirSizeBytes(p), 0);
+  if (existing.length === 0) return { ok: false, error: 'Thành phần chưa được cài — không có gì để xóa.' };
+  return { ok: true, toolId, name: item.name, installed: item.installed, critical, paths: existing, sizeBytes, warnings, keepSharedFiles };
+}
+
+/** Xóa thật (người dùng đã xác nhận trong app). Trả về dung lượng đã giải phóng. */
+function uninstallTool(toolId, { confirmCritical = false } = {}) {
+  const plan = getUninstallPlan(toolId);
+  if (plan.ok && plan.critical && !confirmCritical) {
+    const e = new Error(plan.warnings[0]);
+    e.code = 'CRITICAL_CONFIRM_REQUIRED';
+    throw e;
+  }
+  if (!plan.ok) {
+    const e = new Error(plan.error);
+    e.code = 'NOT_REMOVABLE';
+    throw e;
+  }
+  if (activeInstallJobs && Array.from(activeInstallJobs.values()).some((j) => j.toolId === toolId && j.status === 'running')) {
+    throw new Error('Thành phần này đang được cài đặt — hãy đợi cài xong rồi xóa.');
+  }
+  // Dừng tiến trình đang giữ file (máy chủ Qwen, VieNeu) trước khi xóa — Windows không cho xóa file đang mở
+  try {
+    if (toolId === 'localLlmQwen') localLlm.stop();
+    if (toolId === 'vieneuTts') vieneuService.stop();
+  } catch (_) {}
+  if (toolId === 'localLlmQwen' && plan.keepSharedFiles) {
+    try {
+      const man = readQwenManifest();
+      if (man && Array.isArray(man.usedBy)) {
+        man.usedBy = man.usedBy.filter((u) => path.resolve(u).toLowerCase() !== path.resolve(PROJECT_ROOT).toLowerCase());
+        fs.writeFileSync(localLlm.QWEN_MANIFEST, JSON.stringify(man, null, 2), 'utf8');
+      }
+    } catch (_) {}
+  }
+  const failed = [];
+  for (const p of plan.paths) {
+    try {
+      fs.rmSync(p, { recursive: true, force: true, maxRetries: 3, retryDelay: 300 });
+    } catch (err) {
+      failed.push(`${p}: ${err.code || err.message}`);
+    }
+  }
+  // Ghi nhận người dùng không muốn thành phần này → cài đặt Terminal (setup) không hỏi lại
+  try {
+    const guide = require('./component_guide');
+    const c = guide.loadChoices();
+    guide.saveChoices({ declined: [...c.declined, toolId] });
+  } catch (_) {}
+  if (failed.length) {
+    const e = new Error(`Không xóa hết được (file đang được dùng?): ${failed.join(' | ')}. Hãy đóng các tác vụ đang chạy rồi thử lại.`);
+    e.code = 'PARTIAL';
+    throw e;
+  }
+  return { toolId, name: plan.name, freedBytes: plan.sizeBytes, removed: plan.paths, warnings: plan.warnings };
+}
+
 module.exports = {
+  isOcrEnInstalled,
+  isSenseVoiceInstalled,
+  SENSEVOICE_DIR,
+  getUninstallPlan,
+  uninstallTool,
   isOcrInstalled,
   OCR_MODELS_DIR,
   _internals: { downloadVerifiedVcRedist },

@@ -12,11 +12,12 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { generateText, parseJsonFromModel, AiProviderError } = require('./ai_provider_manager');
+const { generateText, parseJsonFromModel, AiProviderError, isLocalProvider, isProviderReady, primaryProviderFor, loadSettings } = require('./ai_provider_manager');
+const LOCAL_AI_ID = 'local_qwen';
 
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
 const CACHE_DIR = path.join(process.env.CN_AI_CONFIG_DIR || path.join(PROJECT_ROOT, 'config'), 'ai_cache', 'translation');
-const PROMPT_VERSION = 'v2-2026-11-15';
+const PROMPT_VERSION = 'v3-2026-11-17';
 
 const LANG_NAMES_VI = {
   zh: 'tiếng Trung',
@@ -26,46 +27,44 @@ const LANG_NAMES_VI = {
   ko: 'tiếng Hàn'
 };
 
-// Prompt nền tảng (theo yêu cầu của người dùng) — giữ nguyên nội dung.
-const DUBBING_TRANSLATION_PROMPT = `Đóng vai là một phiên dịch viên chuyên nghiệp, có kinh nghiệm dịch thuật và phiên dịch thực tế.
+// Prompt dịch lồng tiếng (bản 3, 2026-11-17): giữ nguyên các yêu cầu gốc của người dùng + hướng dẫn chất lượng
+// (đọc cả kịch bản trước, xưng hô nhất quán, câu bị cắt qua nhiều phân đoạn, phương ngữ/khẩu ngữ, chơi chữ).
+const DUBBING_TRANSLATION_PROMPT = `Đóng vai là một phiên dịch viên lồng tiếng phim chuyên nghiệp, nhiều năm kinh nghiệm dịch thoại phim, video ngắn và hài.
 
-Nhiệm vụ của bạn là dịch nội dung văn bản được cung cấp từ ngôn ngữ nguồn sang ngôn ngữ đích.
+Nhiệm vụ: dịch lời thoại của video từ ngôn ngữ nguồn sang ngôn ngữ đích để lồng tiếng (đọc bằng giọng TTS).
 
-Yêu cầu:
-
-1. Đảm bảo dịch chính xác nội dung, ngữ cảnh và ý nghĩa của câu gốc.
-2. Sử dụng cách diễn đạt tự nhiên như người bản ngữ, không dịch máy móc từng từ.
-3. Ưu tiên văn phong khẩu ngữ, dễ nghe, phù hợp với nội dung hội thoại trong video.
-4. Giữ nguyên tên riêng, số liệu, thuật ngữ chuyên ngành và các thông tin quan trọng.
-5. Không tự ý thêm, lược bỏ hoặc suy diễn nội dung.
-6. Không giải thích, không bình luận, không đưa ra nhận xét ngoài nội dung cần dịch.
-7. Câu dịch phải phù hợp với việc chuyển đổi thành giọng nói TTS.
-8. Đảm bảo độ dài câu dịch hợp lý để có thể đồng bộ với thời lượng lời thoại gốc.
+CÁCH LÀM:
+1. Đọc TOÀN BỘ kịch bản trước khi dịch: nắm bối cảnh, ai đang nói với ai, quan hệ và tính cách nhân vật, giọng điệu cảnh (hài, căng thẳng, trang trọng...).
+2. Dịch theo Ý của cả câu/cả lượt thoại, không dịch máy móc từng chữ. Người xem phải hiểu ngay khi nghe, câu không được cụt nghĩa hay tối nghĩa.
+3. Một câu nói bị phụ đề cắt qua NHIỀU phân đoạn liên tiếp: hiểu cả câu, rồi chia phần nghĩa tương ứng vào từng phân đoạn theo đúng thứ tự, sao cho đọc nối liền vẫn là một câu tự nhiên. Không dồn nghĩa của đoạn này sang đoạn khác.
+4. Xưng hô (đặc biệt khi dịch sang tiếng Việt): chọn theo quan hệ và giọng điệu, giữ NHẤT QUÁN giữa cùng các nhân vật trong suốt video.
+   - 老板 = ông chủ / bà chủ / chủ quán (người bán hàng, chủ tiệm), KHÔNG dịch "chủ nhân"; 老大 = đại ca / sếp; 兄弟 = anh em / người anh em; 大师 = đại sư; 师傅 = sư phụ (cổ trang) hoặc bác tài / thợ (hiện đại).
+   - 老子 khi tự xưng = "ông đây" / "tao" (ngạo mạn, cục cằn), không phải "Lão Tử".
+5. Khẩu ngữ, tiếng lóng, phương ngữ (Tứ Xuyên, Đông Bắc...): dịch đúng nghĩa thực. Ví dụ: 做啥子 = làm gì; 晓得 = biết; 莫 = đừng; 没得 = không có; 要得 = được đấy; 巴适 = sướng/tuyệt; 脑壳 = cái đầu; 咋个 = sao/thế nào. Trợ từ cuối câu (嗦, 噻, 嘛, 嘞, 哈, 咯) chuyển thành sắc thái tương ứng (à, mà, chứ, nhé, đấy...), không bỏ mất giọng điệu.
+6. Thành ngữ, tục ngữ, câu nói quen thuộc: dùng cách nói tương đương tự nhiên của ngôn ngữ đích. Chơi chữ / câu gây cười: giữ được cái ý gây cười, không dịch nghĩa đen làm mất chuyện.
+7. Câu cảm thán, tiếng kêu (嗯, 啊, 哎, 嘿嘿, 呃...): dịch thành từ cảm thán ngắn tương ứng (Ừ, À, Ơ, Hì hì, Ờ...).
+8. Giữ nguyên số liệu, tên thương hiệu quốc tế; tên người, địa danh, danh hiệu Trung Quốc dùng âm Hán-Việt (苏无名 → Tô Vô Danh, 长安 → Trường An). Không tự thêm, bớt hay suy diễn nội dung; không giải thích, không bình luận.
+9. Độ dài: câu dịch nên vừa thời lượng của đoạn (xem "max_length_hint"); ưu tiên câu gọn nhưng KHÔNG được bỏ ý chính.
 
 ĐẶC BIỆT QUAN TRỌNG - GIỮ NGUYÊN CẤU TRÚC DỮ LIỆU:
+- Không thay đổi số lượng phân đoạn, ID hay thứ tự các phân đoạn.
+- Không gộp nhiều phân đoạn thành một, không tách một phân đoạn thành nhiều.
+- Mốc thời gian do hệ thống giữ nguyên; chỉ trả về bản dịch theo ID.
+- Kết quả là MỘT đối tượng JSON duy nhất, không có chữ nào bên ngoài JSON.
 
-- Không thay đổi số lượng phân đoạn.
-- Không thay đổi ID của từng phân đoạn.
-- Không thay đổi thứ tự các câu.
-- Giữ nguyên timestamp bắt đầu và kết thúc của từng phân đoạn.
-- Không gộp nhiều câu thành một phân đoạn.
-- Không tự ý tách một phân đoạn thành nhiều phân đoạn.
-- Chỉ được thay đổi nội dung văn bản cần dịch.
-- Phải bảo toàn cấu trúc dữ liệu đầu vào để hệ thống có thể sử dụng kết quả dịch ghép nối trực tiếp với video.
-
-Hãy trả về kết quả theo đúng cấu trúc dữ liệu đầu vào, không thêm nội dung giải thích bên ngoài.
-
-QUY TẮC BỔ SUNG CHO LỒNG TIẾNG (BẮT BUỘC):
-- "translated_text" CHỈ chứa đúng câu sẽ được đọc lồng tiếng: không ghi chú, không dấu ngoặc giải thích, không phiên âm, không lặp lại câu gốc, không tiền tố như "Dịch:".
-- Khi dịch sang tiếng Việt: KHÔNG để sót chữ Hán/Nhật/Hàn. Tên người, địa danh, triều đại, chức danh Trung Quốc dùng âm Hán-Việt (ví dụ: 苏无名 → Tô Vô Danh, 长安 → Trường An); tên thương hiệu/quốc tế giữ cách viết thông dụng.
-- Thành ngữ, tục ngữ dịch bằng cách nói tương đương tự nhiên của người bản ngữ, không dịch từng chữ.
-- Lời nói cắt ngang/chưa hết câu ở đoạn gốc thì bản dịch cũng giữ đúng phần nghĩa của đoạn đó, không mượn ý của đoạn bên cạnh.
-- Không lặp từ vô nghĩa; mỗi phân đoạn có đúng một bản dịch.`;
+QUY TẮC BẮT BUỘC CHO "translated_text":
+- CHỈ chứa đúng câu sẽ được đọc lồng tiếng: không ghi chú, không ngoặc giải thích, không phiên âm, không chép lại câu gốc, không tiền tố như "Dịch:".
+- Dịch sang tiếng Việt thì KHÔNG được còn sót chữ Hán/Nhật/Hàn.
+- Mỗi phân đoạn đúng một bản dịch, không lặp từ vô nghĩa.`;
 
 const STYLE_NOTES = {
   natural: 'Văn phong: khẩu ngữ tự nhiên, đời thường, như người bản ngữ đang nói chuyện.',
+  serious: 'Văn phong: NGHIÊM TÚC, trang trọng, chuẩn mực (tin tức, tài liệu, phóng sự, giáo dục): câu rõ ràng, dùng từ chính xác, không dùng tiếng lóng hay đùa cợt; xưng hô lịch sự (tôi, chúng tôi, quý vị, các bạn).',
+  comic: 'Văn phong: HÀI HƯỚC / COMIC: lời thoại nhí nhảnh, đậm chất khẩu ngữ, được dùng tiếng lóng thông dụng và cách nói vui của giới trẻ để tạo tiếng cười; giữ trọn ý và nhịp gây cười (punchline) của câu gốc, không biến thành câu nghiêm túc.',
+  ancient: 'Văn phong: CỔ TRANG / KIẾM HIỆP: xưng hô cổ (ta, ngươi, huynh, đệ, tỷ, muội, tại hạ, các hạ, bổn tọa...), dùng từ Hán-Việt vừa phải, câu có không khí cổ phong nhưng vẫn dễ nghe; nếu cảnh mang tính gây cười thì vẫn giữ cái hài.',
   review: 'Văn phong: review / giới thiệu chuyên nghiệp, mạch lạc, súc tích.',
-  story: 'Văn phong: kể chuyện / thuyết minh mượt mà, giàu nhịp điệu.'
+  story: 'Văn phong: kể chuyện / thuyết minh mượt mà, giàu nhịp điệu.',
+  youth: 'Văn phong: TRẺ TRUNG / MẠNG XÃ HỘI (vlog, TikTok): năng động, gần gũi, xưng "mình – các bạn", có thể dùng từ ngữ mạng thông dụng nhưng không thô tục.'
 };
 
 const LANG_EN = { zh: 'Chinese', vi: 'Vietnamese', en: 'English', ja: 'Japanese', ko: 'Korean' };
@@ -92,10 +91,6 @@ const RESPONSE_SCHEMA_GEMINI = {
         type: 'OBJECT',
         properties: {
           id: { type: 'INTEGER' },
-          start: { type: 'NUMBER' },
-          end: { type: 'NUMBER' },
-          speaker_id: { type: 'STRING' },
-          source_text: { type: 'STRING' },
           translated_text: { type: 'STRING' }
         },
         required: ['id', 'translated_text']
@@ -112,7 +107,15 @@ function countSpeechUnits(text, lang) {
   return t.split(/\s+/).filter(Boolean).length;
 }
 
-function buildUserPayload(chunk, ctxBefore, ctxAfter, sourceLang, targetLang, style) {
+// Lời thoại nhận dạng được có giọng Quảng Đông / địa phương (SenseVoice báo) → nhắc AI hiểu theo nghĩa phương ngữ
+const DIALECT_NOTES = {
+  yue: 'Lưu ý nguồn: lời thoại có giọng QUẢNG ĐÔNG hoặc phương ngữ (Tứ Xuyên...), có thể viết bằng chữ Quảng Đông (佢 = anh ấy/cô ấy, 嘅 = của, 咗 = rồi, 冇 = không có, 唔 = không, 喺 = ở, 咁 = như vậy, 乜嘢 = cái gì, 點解 = tại sao) hoặc chữ đồng âm do nhận dạng giọng nói. Hiểu theo nghĩa phương ngữ và ngữ cảnh, KHÔNG dịch theo nghĩa đen từng chữ đồng âm.'
+};
+
+const OCR_SOURCE_NOTE =
+  'Lưu ý nguồn: lời thoại được ĐỌC TỪ PHỤ ĐỀ IN TRONG HÌNH (OCR) nên có thể sai vài chữ hoặc dính/thiếu dấu cách (ví dụ tiếng Anh: c↔e "nudc" = nude, "thcse" = these; l↔f; rn↔m; thiếu chữ đầu câu). Hiểu theo ngữ cảnh rồi dịch đúng ý, KHÔNG dịch lỗi chính tả.';
+
+function buildUserPayload(chunk, ctxBefore, ctxAfter, sourceLang, targetLang, style, sourceDialect = '', sourceOrigin = '') {
   const rate = SPEECH_UNITS_PER_SEC[targetLang] || 4;
   const unitName = targetLang === 'vi' ? 'âm tiết' : targetLang === 'zh' || targetLang === 'ja' ? 'ký tự' : 'từ';
   const input = {
@@ -133,8 +136,11 @@ function buildUserPayload(chunk, ctxBefore, ctxAfter, sourceLang, targetLang, st
     `Ngôn ngữ nguồn: ${LANG_NAMES_VI[sourceLang] || sourceLang}. Ngôn ngữ đích: ${LANG_NAMES_VI[targetLang] || targetLang}.`,
     STYLE_NOTES[style] || STYLE_NOTES.natural,
     ...(sourceLang === 'en' ? [ENGLISH_SOURCE_NOTES] : []),
+    ...(DIALECT_NOTES[sourceDialect] ? [DIALECT_NOTES[sourceDialect]] : []),
+    ...(sourceOrigin === 'ocr' ? [OCR_SOURCE_NOTE] : []),
     `Trường "max_length_hint" là độ dài gợi ý tối đa để giọng đọc TTS vừa thời lượng (end - start) của đoạn. Ưu tiên câu gọn, nhưng KHÔNG được lược bỏ ý quan trọng.`,
-    `Chỉ điền trường "translated_text" cho từng phân đoạn; id, start, end, speaker_id giữ nguyên giá trị. Để tiết kiệm độ dài, KHÔNG cần chép lại "source_text" và "max_length_hint" trong kết quả. Trả về một đối tượng JSON duy nhất dạng {"segments": [{"id": ..., "start": ..., "end": ..., "speaker_id": "...", "translated_text": "..."}]} với đúng ${chunk.length} phân đoạn, đúng thứ tự.`
+    `Trường "speaker_id" cho biết ai đang nói (cùng speaker_id = cùng một người) để chọn xưng hô.`,
+    `Kết quả: một đối tượng JSON duy nhất dạng {"segments": [{"id": ..., "translated_text": "..."}]} với đúng ${chunk.length} phân đoạn, đúng thứ tự, mỗi phần tử CHỈ gồm "id" và "translated_text" (không chép lại start, end, source_text, max_length_hint).`
   ];
   if (ctxBefore.length > 0) {
     lines.push(
@@ -152,7 +158,7 @@ function buildUserPayload(chunk, ctxBefore, ctxAfter, sourceLang, targetLang, st
   const tgtName = LANG_EN[targetLang] || targetLang;
   lines.push(
     `TASK (bắt buộc): Translate every "source_text" from ${srcName} into ${tgtName}. Put ONLY the ${tgtName} translation into "translated_text". "translated_text" must be written in ${tgtName} — never copy the ${srcName} source.`,
-    `Ví dụ định dạng: {"segments":[{"id":7,"start":1.2,"end":3.4,"speaker_id":"speaker_1","translated_text":"${targetLang === 'vi' ? 'Xin chào mọi người.' : 'Hello everyone.'}"}]}`
+    `Ví dụ định dạng: {"segments":[{"id":7,"translated_text":"${targetLang === 'vi' ? 'Xin chào mọi người.' : 'Hello everyone.'}"}]}`
   );
   lines.push('DỮ LIỆU ĐẦU VÀO:', JSON.stringify(input, null, 1));
   return lines.join('\n\n');
@@ -240,6 +246,8 @@ function cacheKey(chunk, opts) {
       s: opts.sourceLang,
       t: opts.targetLang,
       st: opts.style,
+      d: opts.sourceDialect || '',
+      o: opts.sourceOrigin || '',
       p: opts.providerId || 'feature',
       m: opts.model || '',
       items: chunk.map((c) => [c.id, c.start, c.end, c.source_text])
@@ -275,7 +283,7 @@ async function translateChunk(chunk, ctxBefore, ctxAfter, opts, stats, depth = 0
     stats.model = stats.model || cached.model || '';
     return cached.texts;
   }
-  const baseUser = buildUserPayload(chunk, ctxBefore, ctxAfter, sourceLang, targetLang, style);
+  const baseUser = buildUserPayload(chunk, ctxBefore, ctxAfter, sourceLang, targetLang, style, opts.sourceDialect || '', opts.sourceOrigin || '');
   let user = baseUser;
   let lastProblems = [];
 
@@ -292,6 +300,8 @@ async function translateChunk(chunk, ctxBefore, ctxAfter, opts, stats, depth = 0
       user,
       jsonSchema: { gemini: RESPONSE_SCHEMA_GEMINI },
       temperature: attempt >= 3 ? 0.8 : 0.3,
+      timeoutMs: opts.timeoutMs,
+      cloudOnly: Boolean(opts.cloudOnly),
       signal,
       allowCloud: opts.allowCloud !== false
     });
@@ -365,7 +375,7 @@ async function translateChunk(chunk, ctxBefore, ctxAfter, opts, stats, depth = 0
  * @param {Array<{index?:number,startSec:number,endSec:number,sourceText:string,speakerId?:string}>} segments
  * @returns {Promise<{translations:string[], mode:string, usedCloud:true, stats:object}>}
  */
-async function translateSegmentsWithLLM(segments, { sourceLang, targetLang, style = 'natural', providerId, model, signal, onProgress, onChunk, allowCloud = true, useCache = true } = {}) {
+async function translateSegmentsWithLLM(segments, { sourceLang, targetLang, style = 'natural', providerId, model, signal, onProgress, onChunk, allowCloud = true, useCache = true, sourceDialect = '', sourceOrigin = '' } = {}) {
   const items = (segments || []).map((s, idx) => ({
     id: Number(s.id ?? s.index ?? idx + 1) || idx + 1,
     start: Number(Number(s.startSec ?? s.start ?? 0).toFixed(3)),
@@ -384,45 +394,74 @@ async function translateSegmentsWithLLM(segments, { sourceLang, targetLang, styl
   const toTranslateIdx = items.map((it, i) => (it.source_text ? i : -1)).filter((i) => i >= 0);
   const stats = { requests: 0, retries: 0, splits: 0, inputTokens: 0, outputTokens: 0, chunks: 0, cacheHits: 0, partialRetries: 0, fallbacks: [], problems: [], providerId: providerId || '', model: model || '' };
 
-  // Lô ~35 đoạn hoặc ~3500 ký tự nguồn
-  const chunks = [];
-  let cur = [];
-  let curChars = 0;
-  for (const i of toTranslateIdx) {
-    const len = items[i].source_text.length;
-    if (cur.length > 0 && (cur.length >= 35 || curChars + len > 3500)) {
-      chunks.push(cur);
-      cur = [];
-      curChars = 0;
-    }
-    cur.push(i);
-    curChars += len;
-  }
-  if (cur.length) chunks.push(cur);
-  stats.chunks = chunks.length;
-
+  // AI đám mây (ChatGPT, Gemini...): gửi CẢ KỊCH BẢN trong 1 request để AI hiểu toàn bộ mạch truyện, xưng hô nhất quán.
+  //   Chỉ video rất dài (> 400 câu / 24.000 ký tự, ~40 phút thoại) mới chia thành vài phần lớn để không vượt giới hạn trả lời của model.
+  // AI Local (Qwen trên máy): giữ lô ~35 câu — model nhỏ chạy trên máy dễ trả JSON hỏng/cụt với đầu vào dài, lô nhỏ ổn định hơn
+  //   và hỏng 1 lô chỉ phải dịch lại lô đó.
+  const primary = primaryProviderFor('translation', providerId);
+  const wholeScript = Boolean(primary) && !isLocalProvider(primary);
+  stats.wholeScript = wholeScript;
   let done = 0;
-  for (const idxList of chunks) {
-    const chunk = idxList.map((i) => items[i]);
-    const firstIdx = idxList[0];
-    const lastIdx = idxList[idxList.length - 1];
-    const ctxBefore = items
-      .slice(Math.max(0, firstIdx - 4), firstIdx)
-      .filter((s) => s.source_text)
-      .map((s) => ({ ...s, translated_text: translations[items.indexOf(s)] }));
-    const ctxAfter = items.slice(lastIdx + 1, lastIdx + 3).filter((s) => s.source_text);
-    const texts = await translateChunk(chunk, ctxBefore, ctxAfter, { sourceLang, targetLang, style, providerId, model, signal, allowCloud, useCache }, stats);
-    idxList.forEach((segIdx, k) => {
-      translations[segIdx] = texts[k];
-    });
-    done += idxList.length;
-    // Báo từng lô đã dịch xong (vị trí trong mảng `segments` + bản dịch) để lưu tiến độ, chạy tiếp được nếu lô sau lỗi
-    if (typeof onChunk === 'function') {
-      try {
-        onChunk(idxList.slice(), texts.slice(), stats);
-      } catch (_) {}
+
+  /** Dịch các vị trí `idxs` theo lô tối đa maxSegs câu / maxChars ký tự. */
+  const runChunks = async (idxs, maxSegs, maxChars, over = {}) => {
+    const chunks = [];
+    let cur = [];
+    let curChars = 0;
+    for (const i of idxs) {
+      const len = items[i].source_text.length;
+      if (cur.length > 0 && (cur.length >= maxSegs || curChars + len > maxChars)) {
+        chunks.push(cur);
+        cur = [];
+        curChars = 0;
+      }
+      cur.push(i);
+      curChars += len;
     }
-    if (typeof onProgress === 'function') onProgress(done, toTranslateIdx.length);
+    if (cur.length) chunks.push(cur);
+    stats.chunks += chunks.length;
+    for (const idxList of chunks) {
+      const chunk = idxList.map((i) => items[i]);
+      const firstIdx = idxList[0];
+      const lastIdx = idxList[idxList.length - 1];
+      const ctxBefore = items
+        .slice(Math.max(0, firstIdx - 4), firstIdx)
+        .filter((x) => x.source_text)
+        .map((x) => ({ ...x, translated_text: translations[items.indexOf(x)] }));
+      const ctxAfter = items.slice(lastIdx + 1, lastIdx + 3).filter((x) => x.source_text);
+      // Thời gian chờ theo độ dài: cả kịch bản cần lâu hơn 1 lô 35 câu (≈ 1,5 s/câu, tối thiểu 90 s, tối đa 10 phút)
+      const timeoutMs = Math.min(600000, Math.max(90000, chunk.length * 1500));
+      const texts = await translateChunk(chunk, ctxBefore, ctxAfter, { sourceLang, targetLang, style, providerId, model, signal, allowCloud, useCache, timeoutMs, sourceDialect, sourceOrigin, ...over }, stats);
+      idxList.forEach((segIdx, k) => {
+        translations[segIdx] = texts[k];
+      });
+      done += idxList.length;
+      // Báo từng lô đã dịch xong (vị trí trong mảng `segments` + bản dịch) để lưu tiến độ, chạy tiếp được nếu lô sau lỗi
+      if (typeof onChunk === 'function') {
+        try {
+          onChunk(idxList.slice(), texts.slice(), stats);
+        } catch (_) {}
+      }
+      if (typeof onProgress === 'function') onProgress(done, toTranslateIdx.length);
+    }
+  };
+
+  if (!wholeScript) {
+    await runChunks(toTranslateIdx, 35, 3500);
+  } else {
+    try {
+      await runChunks(toTranslateIdx, 400, 24000, { cloudOnly: true });
+    } catch (err) {
+      if (err && err.code === 'CANCELLED') throw err;
+      const feat = ((loadSettings() || {}).features || {}).translation || {};
+      const canLocal = feat.autoFallback !== false && primary !== LOCAL_AI_ID && isProviderReady(LOCAL_AI_ID);
+      if (!canLocal) throw err;
+      // AI đám mây lỗi/quá tải/hết hạn mức → dịch phần còn lại bằng AI Local theo lô nhỏ (ổn định với model nhỏ)
+      stats.fallbacks.push(`${LOCAL_AI_ID} (AI đám mây lỗi: ${err.code || err.message})`);
+      stats.problems.push(`AI đám mây không dịch được (${err.code || ''}: ${String(err.message || '').slice(0, 120)}) → chuyển sang AI Local theo lô 35 câu.`);
+      const rest = toTranslateIdx.filter((i) => !String(translations[i] || '').trim());
+      await runChunks(rest, 35, 3500, { providerId: LOCAL_AI_ID, model: undefined, cloudOnly: false });
+    }
   }
 
   // Cảnh báo câu dịch quá dài so với thời lượng (để UI hiển thị)
@@ -439,7 +478,7 @@ async function translateSegmentsWithLLM(segments, { sourceLang, targetLang, styl
   return {
     translations,
     usedCloud: true,
-    mode: `AI ${stats.providerId} (${stats.model}) • ${stats.chunks} lô, ${stats.requests} request${stats.cacheHits ? `, ${stats.cacheHits} lô dùng lại từ bộ nhớ đệm` : ''}${stats.fallbacks.length ? ` • dự phòng: ${Array.from(new Set(stats.fallbacks)).join(', ')}` : ''}`,
+    mode: `AI ${stats.providerId} (${stats.model}) • ${stats.wholeScript && stats.chunks === 1 ? 'cả kịch bản trong 1 lần gửi' : `${stats.chunks} lô`}, ${stats.requests} request${stats.cacheHits ? `, ${stats.cacheHits} lô dùng lại từ bộ nhớ đệm` : ''}${stats.fallbacks.length ? ` • dự phòng: ${Array.from(new Set(stats.fallbacks)).join(', ')}` : ''}`,
     stats
   };
 }
