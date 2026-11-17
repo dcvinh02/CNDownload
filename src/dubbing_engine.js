@@ -2813,11 +2813,19 @@ function startDubbingJob({
         if (isSeparationAvailable()) {
           jobState.step = 'Bước 5/5: Đang tách giọng gốc khỏi nhạc nền (giữ nhạc nền, bỏ lời gốc)...';
           jobState.statusText = jobState.step;
-          backgroundWav = await separateBackgroundAudio(videoPath, tempDir, trackProc, (pos, total) => {
-            jobState.progress = 88 + Math.round((pos / Math.max(1, total)) * 5);
-            jobState.step = `Bước 5/5: Đang tách giọng gốc khỏi nhạc nền... ${Math.round((pos / Math.max(1, total)) * 100)}%`;
-            jobState.statusText = jobState.step;
-          });
+          try {
+            backgroundWav = await separateBackgroundAudio(videoPath, tempDir, trackProc, (pos, total) => {
+              jobState.progress = 88 + Math.round((pos / Math.max(1, total)) * 5);
+              jobState.step = `Bước 5/5: Đang tách giọng gốc khỏi nhạc nền... ${Math.round((pos / Math.max(1, total)) * 100)}%`;
+              jobState.statusText = jobState.step;
+            });
+          } catch (sepErr) {
+            if (isCancelled()) return;
+            // Tách giọng lỗi (model hỏng/không nạp được) → không dừng video: ghép bằng âm thanh gốc + tự hạ tiếng gốc
+            backgroundWav = null;
+            jlog('warn', `Tách giọng gốc lỗi (${sepErr.message}) — bỏ qua, ghép lồng tiếng với âm thanh gốc.`);
+            jobState.warnings.push(`Tách giọng gốc lỗi (${sepErr.message}) nên dùng âm thanh gốc đầy đủ. Có thể cài lại "Tách giọng gốc khỏi nhạc nền" trong 🧰 Công cụ.`);
+          }
           if (isCancelled()) return;
         } else {
           jobState.warnings.push('Chưa cài mô hình tách giọng (Spleeter) nên vẫn dùng âm thanh gốc đầy đủ — mở trình cài công cụ để cài.');
