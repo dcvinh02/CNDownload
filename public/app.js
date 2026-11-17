@@ -1534,7 +1534,10 @@ function renderLocalModelsGrid(models) {
   }
 
   // Mặc định thu gọn bảng tài nguyên dài, CHỈ mở sẵn khi thiếu mô hình mặc định hoặc người dùng chủ động mở
-  if (missingDefaults.length > 0) {
+  // Thiếu mô hình: chỉ tự mở 1 lần đầu; sau đó giữ theo lựa chọn của người dùng (dòng cảnh báo đỏ vẫn hiện)
+  if (missingDefaults.length > 0 && !window.__dubResAutoOpened) {
+    window.__dubResAutoOpened = true;
+    dubResourcesUserExpanded = true;
     toggleDubResources(true);
   } else {
     toggleDubResources(Boolean(dubResourcesUserExpanded));
