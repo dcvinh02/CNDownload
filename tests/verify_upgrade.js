@@ -1347,6 +1347,21 @@ async function main() {
     assert(r.status === 200, `status=${r.status}`);
     return `HTTP ${r.status}`;
   });
+  await check('Ảnh thu nhỏ video đã tải (/api/thumb): tạo được JPEG cho video có tên tiếng Việt trong thư mục lưu', async () => {
+    const dir = path.join(process.env.CN_DEFAULT_DOWNLOAD_DIR, 'Douyin');
+    fs.mkdirSync(dir, { recursive: true });
+    const vid = path.join(dir, 'Video thử ảnh nhỏ – Tải xuống 抖音.mp4');
+    ff(['-f', 'lavfi', '-i', 'testsrc=size=640x360:rate=25:duration=3', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', vid]);
+    const r = await new Promise((resolve, reject) => {
+      http.get({ host: '127.0.0.1', port, path: `/api/thumb?path=${encodeURIComponent(vid)}` }, (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => resolve({ status: res.statusCode, type: res.headers['content-type'] || '', body: Buffer.concat(chunks) }));
+      }).on('error', reject);
+    });
+    assert(r.status === 200 && /image\/jpeg/.test(r.type) && r.body[0] === 0xff && r.body[1] === 0xd8, `HTTP ${r.status} ${r.type}: ${r.body.toString('utf8').slice(0, 300)}`);
+    return `HTTP 200, JPEG ${r.body.length} byte`;
+  });
   await check('/api/play-local không đọc được file ngoài thư mục lưu (vd. /etc/passwd)', async () => {
     const r = await req('GET', `/api/play-local?path=${encodeURIComponent('/etc/passwd')}`);
     assert(r.status === 404 && !r.body.includes('root:'), `status=${r.status}`);

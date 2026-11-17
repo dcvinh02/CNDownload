@@ -136,6 +136,7 @@ const THUMB_DIR = path.join(process.env.CN_AI_CONFIG_DIR || path.join(__dirname,
 const thumbJobs = new Map();
 let thumbRunning = 0;
 const thumbWaiters = [];
+let lastThumbError = '';
 function getVideoThumbnail(filePath) {
   const st = fs.statSync(filePath);
   const key = require('crypto').createHash('sha1').update(`${path.resolve(filePath)}|${st.size}|${st.mtimeMs}`).digest('hex');
@@ -152,11 +153,18 @@ function getVideoThumbnail(filePath) {
       for (const at of ['1', '0']) {
         const ok = await new Promise((resolve) => {
           const p = spawn(ff, ['-y', '-hide_banner', '-loglevel', 'error', '-ss', at, '-i', filePath, '-frames:v', '1', '-vf', 'scale=240:-2', '-q:v', '6', tmp], { windowsHide: true });
+          let errTxt = '';
+          p.stderr.on('data', (d) => (errTxt = (errTxt + d).slice(-300)));
           const t = setTimeout(() => p.kill('SIGKILL'), 20000);
-          p.on('error', () => resolve(false));
+          p.on('error', (e) => {
+            lastThumbError = `không chạy được ffmpeg (${ff}): ${e.message}`;
+            resolve(false);
+          });
           p.on('close', (code) => {
             clearTimeout(t);
-            resolve(code === 0 && fs.existsSync(tmp) && fs.statSync(tmp).size > 0);
+            const ok = code === 0 && fs.existsSync(tmp) && fs.statSync(tmp).size > 0;
+            if (!ok) lastThumbError = `ffmpeg mã ${code}: ${errTxt.trim()}`;
+            resolve(ok);
           });
         });
         if (ok) {
@@ -763,17 +771,19 @@ function createServer() {
 
   // Ảnh thu nhỏ của video đã tải (cắt 1 khung hình bằng FFmpeg, lưu đệm ở config/thumbs, tối đa 2 lệnh cắt cùng lúc)
   app.get('/api/thumb', async (req, res) => {
+    // Lỗi trả kèm lý do (JSON) để chẩn đoán; thẻ <img> vẫn tự đổi sang biểu tượng 🎞️
     const filePath = req.query.path;
-    if (!filePath || !fs.existsSync(filePath) || !isServableMediaPath(filePath)) return res.status(404).end();
-    if (!/\.(mp4|mov|mkv|webm|avi|flv|m4v|ts)$/i.test(filePath)) return res.status(404).end();
+    if (!filePath || !fs.existsSync(filePath)) return res.status(404).json({ reason: 'không thấy file' });
+    if (!isServableMediaPath(filePath)) return res.status(404).json({ reason: 'file nằm ngoài thư mục lưu' });
+    if (!/\.(mp4|mov|mkv|webm|avi|flv|m4v|ts)$/i.test(filePath)) return res.status(404).json({ reason: 'không phải video' });
     try {
       const out = await getVideoThumbnail(filePath);
-      if (!out) return res.status(404).end();
+      if (!out) return res.status(404).json({ reason: lastThumbError || 'không tạo được ảnh' });
       res.setHeader('Cache-Control', 'private, max-age=86400');
       res.type('jpg');
       fs.createReadStream(out).pipe(res);
-    } catch (_) {
-      res.status(404).end();
+    } catch (e) {
+      res.status(404).json({ reason: e.message });
     }
   });
 
