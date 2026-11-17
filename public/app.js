@@ -903,7 +903,7 @@ async function loadDownloads() {
           : '';
         const isVideo = ['mp4', 'mov', 'mkv', 'webm', 'avi', 'flv', 'm4v', 'ts'].includes(String(f.ext || '').toLowerCase());
         const thumbHtml = isVideo
-          ? `<img class="dl-thumb" loading="lazy" alt="" src="/api/thumb?path=${encodeURIComponent(f.filePath)}" title="Bấm để phát" onclick="playDownloadedVideo('${escapeHtml(f.filePath)}', '${escapeHtml(f.fileName)}')" onerror="this.outerHTML='<div class=&quot;dl-thumb dl-thumb-empty&quot;>🎞️</div>'" />`
+          ? `<img class="dl-thumb" loading="lazy" alt="" src="/api/thumb?path=${encodeURIComponent(f.filePath)}" title="Bấm để phát" onclick="playDownloadedVideo('${escapeHtml(f.filePath)}', '${escapeHtml(f.fileName)}')" onerror="thumbFailed(this)" />`
           : `<div class="dl-thumb dl-thumb-empty">${f.ext === 'mp3' || f.ext === 'm4a' || f.ext === 'wav' ? '🎵' : '📄'}</div>`;
         // Tên dễ đọc: bỏ "douyin_7698977781489486566_" ở đầu, "_50301" và đuôi file ở cuối
         const displayTitle =
@@ -3759,4 +3759,21 @@ function drawOcrOverlay() {
     }
   }
   ov.innerHTML = html;
+}
+
+
+/** Ảnh thu nhỏ không tạo được: hiện 🎞️ và đưa lý do từ máy chủ vào chú thích khi rê chuột (để chẩn đoán). */
+async function thumbFailed(img) {
+  const box = document.createElement('div');
+  box.className = 'dl-thumb dl-thumb-empty';
+  box.textContent = '🎞️';
+  const src = img.getAttribute('src');
+  img.replaceWith(box);
+  try {
+    const r = await fetch(src);
+    const j = await r.json();
+    box.title = `Không tạo được ảnh: ${j.reason || r.status}`;
+  } catch (e) {
+    box.title = `Không tạo được ảnh: ${e.message}`;
+  }
 }
