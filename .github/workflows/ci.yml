@@ -107,48 +107,6 @@ jobs:
           if (-not $text) { throw 'Không nhận được bản dịch' }
           Write-Host "OK: ứng dụng khác gọi Qwen dùng chung → $text"
 
-      # Ứng dụng độc lập: CNVideoScraperPro.exe mở cửa sổ WebView2 riêng, máy chủ chạy ẩn, đóng cửa sổ là tắt hẳn
-      - name: CNVideoScraperPro.exe — cửa sổ riêng WebView2, đóng là tắt máy chủ (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          Get-Process CNVideoScraperPro, node, llama-server -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-          Start-Sleep -Seconds 2
-          if (-not (Test-Path .\CNVideoScraperPro.exe)) { throw 'Thiếu CNVideoScraperPro.exe' }
-          $st = (& .\CNVideoScraperPro.exe --selftest | Out-String).Trim()
-          Write-Host "selftest: $st"
-          if ($st -notmatch '^OK') { throw "selftest lỗi: $st" }
-          Remove-Item config\app_window.log -ErrorAction SilentlyContinue
-          $app = Start-Process .\CNVideoScraperPro.exe -PassThru
-          $ok = $false
-          for ($i = 0; $i -lt 90; $i++) { Start-Sleep -Seconds 2; try { if ((Invoke-WebRequest -UseBasicParsing http://127.0.0.1:3889/api/health).StatusCode -eq 200) { $ok = $true; break } } catch {} }
-          if (-not $ok) { Get-Content config\app_window.log -ErrorAction SilentlyContinue; throw 'CNVideoScraperPro.exe không bật được máy chủ' }
-          $win = $false
-          for ($i = 0; $i -lt 60; $i++) { Start-Sleep -Seconds 2; $app.Refresh(); if ($app.MainWindowHandle -ne 0 -and (Select-String -Path config\app_window.log -Pattern 'Đã mở giao diện bằng WebView2' -Quiet -ErrorAction SilentlyContinue)) { $win = $true; break } }
-          Get-Content config\app_window.log -Encoding UTF8
-          if (-not $win) { throw 'Không thấy cửa sổ app hiển thị bằng WebView2' }
-          Write-Host ("Cửa sổ: '" + $app.MainWindowTitle + "' • tiến trình WebView2: " + @(Get-Process msedgewebview2 -ErrorAction SilentlyContinue).Count)
-          Start-Sleep -Seconds 8
-          Add-Type -AssemblyName System.Drawing, System.Windows.Forms
-          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-          $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
-          [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
-          $bmp.Save((Join-Path $PWD 'exe_window.png'))
-          $app.CloseMainWindow() | Out-Null
-          $down = $false
-          for ($i = 0; $i -lt 20; $i++) { Start-Sleep -Seconds 1; try { Invoke-WebRequest -UseBasicParsing http://127.0.0.1:3889/api/health -TimeoutSec 2 | Out-Null } catch { $down = $true; break } }
-          if (-not $down) { throw 'Đã đóng cửa sổ app nhưng máy chủ vẫn chạy' }
-          if (Get-Process CNVideoScraperPro -ErrorAction SilentlyContinue) { throw 'CNVideoScraperPro.exe chưa thoát sau khi đóng cửa sổ' }
-          Write-Host 'OK: CNVideoScraperPro.exe mở cửa sổ WebView2 riêng; đóng cửa sổ là tắt máy chủ'
-
-      - name: Ảnh chụp cửa sổ CNVideoScraperPro.exe (Windows)
-        if: runner.os == 'Windows' && always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-exe-window
-          path: exe_window.png
-          if-no-files-found: ignore
-
       - name: Tạo lối tắt Desktop (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -157,5 +115,5 @@ jobs:
           $lnk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'CN Video Scraper Pro.lnk'
           if (-not (Test-Path $lnk)) { throw "Không tạo được $lnk" }
           $t = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk).TargetPath
-          if ($t -notmatch '(CNVideoScraperPro\.exe|Start_App_Windows\.bat)$') { throw "Lối tắt trỏ sai: $t" }
+          if ($t -notmatch 'Start_App_Windows\.bat$') { throw "Lối tắt trỏ sai: $t" }
           Write-Host "OK: lối tắt Desktop → $t"

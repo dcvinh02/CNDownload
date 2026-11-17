@@ -36,10 +36,7 @@ Cần có [Node.js 20+](https://nodejs.org) và Internet ở lần cài đầu. 
 
 1. Tải mã nguồn (*Code → Download ZIP*) và giải nén, nên để ở đường dẫn ngắn, ví dụ `C:\CNVideo`.
 2. Chạy `Start_App_Windows.bat`. Lần đầu script chạy `npm install` rồi `scripts/setup.js`. Script hỏi từng thành phần; nhấn Enter là cài theo khuyến nghị. Không cần quyền Administrator.
-3. Các lần sau mở `CNVideoScraperPro.exe` hoặc lối tắt "CN Video Scraper Pro" trên Desktop. File `.exe` được dựng ngay trên máy lúc cài (WebView2, cửa sổ riêng, không mở Edge, đóng cửa sổ là tắt hẳn).
-   - Chưa có `.exe` thì `Start_App_Windows.bat` vẫn mở app bằng Edge.
-   - Máy thiếu WebView2 Runtime: cài tại https://go.microsoft.com/fwlink/p/?LinkId=2124703.
-   - Cửa sổ không hiện: xem `config\app_window.log`, hoặc mở `http://127.0.0.1:3889` trong trình duyệt.
+3. Các lần sau mở `Start_App_Windows.bat` hoặc lối tắt "CN Video Scraper Pro" trên Desktop. App mở trong cửa sổ Edge dạng ứng dụng; giữ cửa sổ dòng lệnh mở trong lúc dùng. Cửa sổ không hiện thì mở `http://127.0.0.1:3889` trong trình duyệt.
 
 Qwen trên Windows được cài vào `%USERPROFILE%\QwenLocal` để ứng dụng khác dùng chung. File `qwen-local.json` trong thư mục đó ghi đường dẫn model, bộ chạy và tham số; `Start_Qwen_Server.bat` mở API chuẩn OpenAI tại `http://127.0.0.1:8765/v1`. Nếu ổ C ít chỗ và app nằm ở ổ khác, setup sẽ hỏi cài vào ổ C hay vào thư mục app (`--qwen-dir=user|app` để chọn trước). Thư mục app có lối tắt `Qwen Local` trỏ tới chỗ cài.
 
@@ -126,7 +123,7 @@ Bộ kiểm thử dùng thư mục cấu hình tạm nên không đụng tới c
 - Nghe giọng nói bằng SenseVoiceSmall thay Whisper small: chính xác hơn, nhanh hơn, nhận được giọng Quảng Đông và tiếng địa phương. Thêm lựa chọn ngôn ngữ đầu vào: Tự động / Phổ thông / Quảng Đông / Tiếng Anh.
 - Đọc phụ đề in trong hình (OCR) cho chữ Trung và tiếng Anh; thêm tab Tinh chỉnh OCR.
 - Dịch bằng AI API gửi cả kịch bản trong một lần; viết lại prompt; thêm văn phong; lỗi ở một câu không còn làm hỏng cả tác vụ.
-- Thêm nút xóa công cụ/model, ảnh thu nhỏ trong danh sách đã tải, ứng dụng Windows dạng `.exe` (WebView2).
+- Thêm nút xóa công cụ/model, ảnh thu nhỏ trong danh sách đã tải.
 - Cài thành phần theo lựa chọn; Qwen trên Windows cài vào thư mục dùng chung `%USERPROFILE%\QwenLocal`.
 
 **1.2.0**

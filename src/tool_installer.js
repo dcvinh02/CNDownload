@@ -945,7 +945,7 @@ function getInstallableToolsCatalog() {
 
 function getInstallableToolsCatalogRaw() {
   // Không liệt kê Argos (localNmt) và Whisper tiny (localAsr): đã kiểm nghiệm chất lượng kém, thay bằng Qwen3.5 9B / Whisper small.
-  const ids = ['windowsApp', 'pythonCore', 'ytdlp', 'ffmpeg', 'webkitSniffer', 'localAsrSenseVoice', 'localAsrSmall', 'subtitleOcr', 'speakerDiarization', 'voiceSeparation', 'localLlmQwen', 'localTts', 'vieneuTts'];
+  const ids = ['pythonCore', 'ytdlp', 'ffmpeg', 'webkitSniffer', 'localAsrSenseVoice', 'localAsrSmall', 'subtitleOcr', 'speakerDiarization', 'voiceSeparation', 'localLlmQwen', 'localTts', 'vieneuTts'];
   const modelsStatus = getLocalModelsStatus();
 
   return ids

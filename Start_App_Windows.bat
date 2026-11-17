@@ -25,12 +25,6 @@ if errorlevel 1 (
   call "%~dp0Tao_Shortcut_Desktop.bat" --quiet
 )
 
-if exist "%~dp0CNVideoScraperPro.exe" (
-  echo Dang mo CN Video Scraper Pro...
-  start "" "%~dp0CNVideoScraperPro.exe"
-  exit /b 0
-)
-
 echo Dang khoi dong CN Video Scraper Pro... (cua so ung dung se tu mo)
 echo Giu cua so den nay mo trong khi dung. Dong no (hoac dong cua so ung dung) de tat ung dung.
 node src\launcher.js
